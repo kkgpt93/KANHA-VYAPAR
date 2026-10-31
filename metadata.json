@@ -1,0 +1,6 @@
+{
+  "name": "VyaparPOS - Billing & Inventory Management",
+  "description": "Fast, offline-ready billing, barcode checkout, real-time inventory management, monthly sales reports, role-based access, and biometric authentication.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

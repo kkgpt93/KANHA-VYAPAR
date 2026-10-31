@@ -1,0 +1,977 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import {
+  Search,
+  Barcode as BarcodeIcon,
+  Trash2,
+  Plus,
+  Minus,
+  Check,
+  CreditCard,
+  Banknote,
+  QrCode,
+  Users,
+  AlertCircle,
+  Sparkles,
+  ShoppingBag,
+  UserPlus,
+  UserCheck,
+  User,
+  X,
+  ChevronDown,
+  Phone,
+  Mail,
+  MapPin,
+  FileText,
+  Printer,
+  Eye,
+} from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import { Product, PaymentMethod, Invoice, Customer } from '../types';
+import { formatCurrency } from '../utils/formatters';
+import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { PrintPreviewModal } from './PrintPreviewModal';
+
+export const POSBilling: React.FC = () => {
+  const {
+    products,
+    customers,
+    selectedPosCustomer,
+    setSelectedPosCustomer,
+    cart,
+    addToCart,
+    removeFromCart,
+    updateCartQuantity,
+    clearCart,
+    checkout,
+    settings,
+    activeUser,
+    invoices,
+  } = useApp();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null);
+
+  // Draft print preview state
+  const [draftInvoice, setDraftInvoice] = useState<Invoice | null>(null);
+  const [isDraftPreviewOpen, setIsDraftPreviewOpen] = useState(false);
+
+  // Checkout form details
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [saveCustomerToDirectory, setSaveCustomerToDirectory] = useState(true);
+  const [showExtraDetailsModal, setShowExtraDetailsModal] = useState(false);
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [customerGstin, setCustomerGstin] = useState('');
+  const [customerNotes, setCustomerNotes] = useState('');
+
+  // Autocomplete customer search state
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [cashTendered, setCashTendered] = useState<number | ''>('');
+  const [billDiscountPercent, setBillDiscountPercent] = useState<number>(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const customerInputRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync selectedPosCustomer from AppContext (e.g. if navigated from Customers tab)
+  useEffect(() => {
+    if (selectedPosCustomer) {
+      setSelectedCustomer(selectedPosCustomer);
+      setCustomerName(selectedPosCustomer.name);
+      setCustomerPhone(selectedPosCustomer.phone);
+      setCustomerEmail(selectedPosCustomer.email || '');
+      setCustomerAddress(selectedPosCustomer.address || '');
+      setCustomerGstin(selectedPosCustomer.gstin || '');
+      setCustomerNotes(selectedPosCustomer.notes || '');
+    }
+  }, [selectedPosCustomer]);
+
+  // Autocomplete customer search results
+  const matchingCustomers = useMemo(() => {
+    const q = customerSearchQuery.toLowerCase().trim();
+    if (!q) return customers.slice(0, 5);
+    return customers.filter(
+      c =>
+        c.name.toLowerCase().includes(q) ||
+        c.phone.includes(q) ||
+        (c.email && c.email.toLowerCase().includes(q))
+    ).slice(0, 6);
+  }, [customers, customerSearchQuery]);
+
+  // Select customer from dropdown
+  const handleSelectCustomer = (c: Customer) => {
+    setSelectedCustomer(c);
+    setCustomerName(c.name);
+    setCustomerPhone(c.phone);
+    setCustomerEmail(c.email || '');
+    setCustomerAddress(c.address || '');
+    setCustomerGstin(c.gstin || '');
+    setCustomerNotes(c.notes || '');
+    setCustomerSearchQuery('');
+    setIsCustomerDropdownOpen(false);
+  };
+
+  // Clear selected customer
+  const handleClearCustomer = () => {
+    setSelectedCustomer(null);
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerEmail('');
+    setCustomerAddress('');
+    setCustomerGstin('');
+    setCustomerNotes('');
+    setCustomerSearchQuery('');
+    setSelectedPosCustomer(null);
+  };
+
+  // Categories list
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    products.forEach(p => set.add(p.category));
+    return ['All', ...Array.from(set)];
+  }, [products]);
+
+  // Filtered Products
+  const filteredProducts = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    return products.filter(p => {
+      const matchCat = selectedCategory === 'All' || p.category === selectedCategory;
+      const matchQuery =
+        !query ||
+        p.name.toLowerCase().includes(query) ||
+        (p.nameHindi && p.nameHindi.toLowerCase().includes(query)) ||
+        p.barcode.includes(query) ||
+        p.category.toLowerCase().includes(query);
+      return matchCat && matchQuery;
+    });
+  }, [products, searchQuery, selectedCategory]);
+
+  // Totals calculations
+  const cartSubtotal = useMemo(() => {
+    return cart.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
+  }, [cart]);
+
+  const cartTaxTotal = useMemo(() => {
+    return cart.reduce((sum, it) => {
+      const lineTotal = it.quantity * it.unitPrice;
+      const discount = (lineTotal * (it.discountPercent || 0)) / 100;
+      return sum + Math.round(((lineTotal - discount) * it.taxRate) / 100);
+    }, 0);
+  }, [cart]);
+
+  const discountAmount = useMemo(() => {
+    return Math.round((cartSubtotal * billDiscountPercent) / 100);
+  }, [cartSubtotal, billDiscountPercent]);
+
+  const grandTotal = useMemo(() => {
+    return Math.max(0, cartSubtotal + cartTaxTotal - discountAmount);
+  }, [cartSubtotal, cartTaxTotal, discountAmount]);
+
+  // Set default cash tendered to grandTotal when grandTotal changes
+  useEffect(() => {
+    if (paymentMethod === 'cash') {
+      setCashTendered(grandTotal);
+    }
+  }, [grandTotal, paymentMethod]);
+
+  const changeDue = useMemo(() => {
+    if (typeof cashTendered === 'number' && cashTendered >= grandTotal) {
+      return cashTendered - grandTotal;
+    }
+    return 0;
+  }, [cashTendered, grandTotal]);
+
+  // Keyboard shortcut listener (F2 for search, F9 for checkout)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === 'F9' && cart.length > 0 && !isProcessing) {
+        e.preventDefault();
+        handleCheckoutSubmit();
+      } else if (e.key === 'F10') {
+        e.preventDefault();
+        handleOpenPrintPreview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    cart,
+    isProcessing,
+    grandTotal,
+    paymentMethod,
+    cashTendered,
+    customerName,
+    customerPhone,
+    customerAddress,
+    customerGstin,
+    customerNotes,
+    billDiscountPercent,
+    selectedCustomer,
+    invoices,
+  ]);
+
+  // Handle barcode scan detection
+  const handleBarcodeScanned = (barcode: string) => {
+    const matched = products.find(p => p.barcode === barcode);
+    if (matched) {
+      if (matched.stock <= 0) {
+        setErrorMsg(`${matched.name} is currently out of stock!`);
+        setTimeout(() => setErrorMsg(null), 3000);
+      } else {
+        addToCart(matched, 1);
+        setErrorMsg(null);
+      }
+    } else {
+      setErrorMsg(`No product found with barcode ${barcode}`);
+      setTimeout(() => setErrorMsg(null), 3000);
+    }
+  };
+
+  // Open Print Preview (either live draft of current cart or last invoice)
+  const handleOpenPrintPreview = () => {
+    if (cart.length === 0) {
+      if (invoices.length > 0) {
+        setActiveInvoice(invoices[0]);
+      } else {
+        setErrorMsg('Add items to cart or select an invoice to preview');
+        setTimeout(() => setErrorMsg(null), 3000);
+      }
+      return;
+    }
+
+    // Build realistic draft invoice matching current POS inputs
+    const draftItems = cart.map(ci => {
+      const gross = ci.quantity * ci.unitPrice;
+      const itemDiscount = (gross * (ci.discountPercent || 0)) / 100;
+      const netAfterItemDiscount = gross - itemDiscount;
+      const taxAmt = Math.round((netAfterItemDiscount * ci.taxRate) / 100);
+      const total = netAfterItemDiscount + taxAmt;
+
+      return {
+        productId: ci.product.id,
+        name: ci.product.name,
+        barcode: ci.product.barcode,
+        unit: ci.product.unit,
+        quantity: ci.quantity,
+        unitPrice: ci.unitPrice,
+        taxRate: ci.taxRate,
+        taxAmount: taxAmt,
+        discountAmount: itemDiscount,
+        total,
+      };
+    });
+
+    const draftSubtotal = draftItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
+    const draftItemDiscounts = draftItems.reduce((sum, it) => sum + it.discountAmount, 0);
+    const draftOverallDiscount = (draftSubtotal * billDiscountPercent) / 100;
+    const draftDiscountTotal = draftItemDiscounts + draftOverallDiscount;
+    const draftTaxTotal = draftItems.reduce((sum, it) => sum + it.taxAmount, 0);
+    const draftGrandTotal = Math.max(0, Math.round(draftSubtotal + draftTaxTotal - draftDiscountTotal));
+
+    const draftInv: Invoice = {
+      id: `draft-preview-${Date.now()}`,
+      invoiceNumber: 'DRAFT-PREVIEW',
+      createdAt: new Date().toISOString(),
+      cashierId: activeUser.id,
+      cashierName: activeUser.name,
+      customerId: selectedCustomer?.id,
+      customerName: customerName.trim() || (selectedCustomer ? selectedCustomer.name : 'Walk-in Customer'),
+      customerPhone: customerPhone.trim() || (selectedCustomer ? selectedCustomer.phone : ''),
+      customerAddress: customerAddress.trim() || (selectedCustomer ? selectedCustomer.address : ''),
+      customerGstin: customerGstin.trim() || (selectedCustomer ? selectedCustomer.gstin : ''),
+      items: draftItems,
+      subtotal: draftSubtotal,
+      taxTotal: draftTaxTotal,
+      discountTotal: draftDiscountTotal,
+      grandTotal: draftGrandTotal,
+      paymentMethod,
+      amountTendered: typeof cashTendered === 'number' ? cashTendered : draftGrandTotal,
+      changeDue:
+        paymentMethod === 'cash' && typeof cashTendered === 'number'
+          ? Math.max(0, cashTendered - draftGrandTotal)
+          : 0,
+      status: 'paid',
+      notes: customerNotes.trim(),
+    };
+
+    setDraftInvoice(draftInv);
+    setIsDraftPreviewOpen(true);
+  };
+
+  const handleCheckoutSubmit = () => {
+    if (cart.length === 0) return;
+    setIsProcessing(true);
+    setErrorMsg(null);
+
+    try {
+      const invoice = checkout({
+        customerId: selectedCustomer?.id,
+        customerName: customerName.trim() || (selectedCustomer ? selectedCustomer.name : ''),
+        customerPhone: customerPhone.trim() || (selectedCustomer ? selectedCustomer.phone : ''),
+        customerEmail: customerEmail.trim() || (selectedCustomer ? selectedCustomer.email : ''),
+        customerAddress: customerAddress.trim() || (selectedCustomer ? selectedCustomer.address : ''),
+        customerGstin: customerGstin.trim() || (selectedCustomer ? selectedCustomer.gstin : ''),
+        customerNotes: customerNotes.trim(),
+        saveCustomer: saveCustomerToDirectory,
+        paymentMethod,
+        amountTendered: typeof cashTendered === 'number' ? cashTendered : grandTotal,
+        discountPercent: billDiscountPercent,
+      });
+
+      setActiveInvoice(invoice);
+      // Reset checkout inputs
+      handleClearCustomer();
+      setBillDiscountPercent(0);
+      setCashTendered('');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Checkout failed');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-neutral-100 dark:bg-neutral-950">
+      {/* Left Area: Catalog, Search & Categories */}
+      <div className="flex-1 flex flex-col min-w-0 border-r border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/60 overflow-hidden">
+        {/* Search & Actions Bar */}
+        <div className="p-3 sm:p-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center gap-2 sm:gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search product name, barcode, or Hindi (Press F2)..."
+              className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          <button
+            onClick={() => setIsScannerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border border-emerald-200 dark:border-emerald-800 rounded-lg transition-colors whitespace-nowrap"
+            title="Open Camera / Barcode Scanner"
+          >
+            <BarcodeIcon className="w-4 h-4" />
+            <span className="hidden sm:inline">Scan Barcode</span>
+          </button>
+        </div>
+
+        {/* Category Filter Tabs */}
+        <div className="px-3 sm:px-4 py-2 bg-white/70 dark:bg-neutral-900/40 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          {categories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                selectedCategory === cat
+                  ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 shadow-xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        {/* Error / Alert banner if any */}
+        {errorMsg && (
+          <div className="mx-4 mt-3 p-2.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-lg flex items-center gap-2 text-xs text-rose-700 dark:text-rose-300">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {/* Products Grid */}
+        <div className="flex-1 p-3 sm:p-4 overflow-y-auto">
+          {filteredProducts.length === 0 ? (
+            <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-400">
+              <ShoppingBag className="w-12 h-12 mb-2 opacity-40 stroke-1" />
+              <p className="text-sm font-medium text-neutral-600 dark:text-neutral-300">
+                No items matching "{searchQuery}"
+              </p>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Check spelling or add item via Inventory menu
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
+              {filteredProducts.map(product => {
+                const isOutOfStock = product.stock <= 0;
+                const isLowStock = product.stock > 0 && product.stock <= product.minStockAlert;
+                const inCart = cart.find(ci => ci.product.id === product.id);
+
+                return (
+                  <div
+                    key={product.id}
+                    onClick={() => !isOutOfStock && addToCart(product, 1)}
+                    className={`relative p-3 rounded-lg border transition-all flex flex-col justify-between select-none ${
+                      isOutOfStock
+                        ? 'bg-neutral-100 dark:bg-neutral-900/40 border-neutral-200 dark:border-neutral-800 opacity-60 cursor-not-allowed'
+                        : 'bg-white dark:bg-neutral-800/90 border-neutral-200 dark:border-neutral-700/60 hover:border-emerald-500 hover:shadow-xs cursor-pointer active:scale-[0.99]'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-1">
+                        <span className="text-[10px] uppercase font-mono text-neutral-400 dark:text-neutral-500 tracking-wider">
+                          {product.category}
+                        </span>
+                        {inCart && (
+                          <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-bold">
+                            {inCart.quantity}
+                          </span>
+                        )}
+                      </div>
+
+                      <h4 className="text-xs sm:text-sm font-semibold text-neutral-900 dark:text-neutral-100 mt-1 line-clamp-2 leading-tight">
+                        {product.name}
+                      </h4>
+                      {product.nameHindi && (
+                        <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
+                          {product.nameHindi}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="mt-3 pt-2 border-t border-neutral-100 dark:border-neutral-700/40 flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-bold text-neutral-900 dark:text-neutral-100 tabular-nums font-mono">
+                          {formatCurrency(product.sellingPrice, settings.currencySymbol)}
+                        </div>
+                        <div className="text-[10px] text-neutral-500 flex items-center gap-1">
+                          <span>Stock: {product.stock} {product.unit}</span>
+                          {isLowStock && (
+                            <span className="text-amber-600 font-medium">· Low</span>
+                          )}
+                          {isOutOfStock && (
+                            <span className="text-rose-600 font-medium">· Out</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={isOutOfStock}
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (!isOutOfStock) addToCart(product, 1);
+                        }}
+                        className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                          isOutOfStock
+                            ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400 cursor-not-allowed'
+                            : 'bg-neutral-100 hover:bg-emerald-600 hover:text-white dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200'
+                        }`}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right Area: Checkout & Cart Terminal (400px on desktop) */}
+      <div className="w-full lg:w-[420px] flex flex-col bg-white dark:bg-neutral-900 border-t lg:border-t-0 border-neutral-200 dark:border-neutral-800 h-[50vh] lg:h-full">
+        {/* Cart Header */}
+        <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
+              Current Bill
+            </span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 font-mono">
+              {cart.reduce((s, c) => s + c.quantity, 0)} items
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenPrintPreview}
+              disabled={cart.length === 0 && invoices.length === 0}
+              className="text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 font-medium transition-colors border border-neutral-200 dark:border-neutral-700 px-2 py-1 rounded-md bg-neutral-50 dark:bg-neutral-800/60"
+              title="Print Preview (F10)"
+            >
+              <Printer className="w-3.5 h-3.5 text-neutral-500" />
+              <span className="hidden sm:inline">Preview</span>
+              <span className="text-[10px] text-neutral-400 font-mono">(F10)</span>
+            </button>
+
+            {cart.length > 0 && (
+              <button
+                onClick={clearCart}
+                className="text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 flex items-center gap-1 font-medium transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Cart Items List */}
+        <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800/60 p-2 sm:p-3">
+          {cart.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center p-6 text-neutral-400">
+              <ShoppingBag className="w-10 h-10 mb-2 opacity-30 stroke-1" />
+              <p className="text-xs font-medium text-neutral-500">Cart is currently empty</p>
+              <p className="text-[11px] text-neutral-400 mt-1 max-w-[200px]">
+                Scan a barcode or click items from catalog to add to bill
+              </p>
+            </div>
+          ) : (
+            cart.map(item => {
+              const lineTotal = item.quantity * item.unitPrice;
+              return (
+                <div key={item.product.id} className="py-2.5 px-1 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <h5 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                      {item.product.name}
+                    </h5>
+                    <div className="flex items-center gap-2 text-[11px] text-neutral-500 font-mono mt-0.5">
+                      <span>₹{item.unitPrice.toFixed(2)}</span>
+                      <span>·</span>
+                      <span>GST {item.taxRate}%</span>
+                    </div>
+                  </div>
+
+                  {/* Quantity Stepper */}
+                  <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-md bg-neutral-50 dark:bg-neutral-800">
+                    <button
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
+                      className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="w-7 text-center text-xs font-semibold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
+                      {item.quantity}
+                    </span>
+                    <button
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
+                      disabled={item.quantity >= item.product.stock}
+                      className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 disabled:opacity-40"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  {/* Line Total */}
+                  <div className="text-right min-w-[64px]">
+                    <span className="text-xs font-bold text-neutral-900 dark:text-neutral-100 font-mono tabular-nums">
+                      ₹{lineTotal.toFixed(0)}
+                    </span>
+                  </div>
+
+                  {/* Remove Button */}
+                  <button
+                    onClick={() => removeFromCart(item.product.id)}
+                    className="text-neutral-400 hover:text-rose-500 p-1 rounded-md transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Customer Details & Discount Section */}
+        <div className="px-3 sm:px-4 py-2.5 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/50 space-y-2">
+          {/* Customer Selection / Active Customer Banner */}
+          {selectedCustomer ? (
+            <div className="p-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/80 rounded-lg flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-[11px] shrink-0">
+                  {selectedCustomer.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-emerald-950 dark:text-emerald-100 truncate block">
+                      {selectedCustomer.name}
+                    </span>
+                    <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-200/70 dark:bg-emerald-800 text-emerald-800 dark:text-emerald-200 font-mono">
+                      ⭐ {selectedCustomer.loyaltyPoints || 0} pts
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-emerald-700 dark:text-emerald-300 font-mono block truncate">
+                    +91 {selectedCustomer.phone}
+                    {selectedCustomer.gstin && ` · GST: ${selectedCustomer.gstin}`}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClearCustomer}
+                className="text-emerald-600 dark:text-emerald-400 hover:text-rose-600 p-1 rounded-md transition-colors"
+                title="Change or remove customer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-1.5" ref={customerInputRef}>
+              <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
+                <span className="font-medium flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-neutral-400" />
+                  Customer Details (ग्राहक विवरण)
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                  className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-0.5"
+                >
+                  <Search className="w-3 h-3" />
+                  <span>Existing ({customers.length})</span>
+                </button>
+              </div>
+
+              {/* Customer Dropdown (if open) */}
+              {isCustomerDropdownOpen && (
+                <div className="p-2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-lg space-y-1.5 text-xs max-h-48 overflow-y-auto">
+                  <input
+                    type="text"
+                    value={customerSearchQuery}
+                    onChange={e => setCustomerSearchQuery(e.target.value)}
+                    placeholder="Search name, phone..."
+                    className="w-full px-2 py-1 text-xs bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded text-neutral-900 dark:text-neutral-100 focus:outline-hidden"
+                    autoFocus
+                  />
+                  <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                    {matchingCustomers.length === 0 ? (
+                      <p className="text-[11px] text-neutral-400 py-2 text-center">
+                        No saved customer found
+                      </p>
+                    ) : (
+                      matchingCustomers.map(c => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => handleSelectCustomer(c)}
+                          className="w-full p-1.5 text-left hover:bg-emerald-50 dark:hover:bg-neutral-800 rounded flex items-center justify-between"
+                        >
+                          <div>
+                            <span className="font-semibold text-neutral-900 dark:text-neutral-100 block">
+                              {c.name}
+                            </span>
+                            <span className="text-[10px] text-neutral-500 font-mono">
+                              +91 {c.phone}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-semibold text-amber-600 font-mono">
+                            ⭐ {c.loyaltyPoints || 0}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Name and Mobile Number inputs */}
+              <div className="grid grid-cols-2 gap-1.5">
+                <div>
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={e => setCustomerName(e.target.value)}
+                    placeholder="Customer Name (नाम)"
+                    className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+                <div className="relative">
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    value={customerPhone}
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setCustomerPhone(val);
+                      // Check if matches an existing customer
+                      if (val.length >= 7) {
+                        const matched = customers.find(c => c.phone.replace(/\D/g, '').endsWith(val));
+                        if (matched && !selectedCustomer) {
+                          // Quick match preview
+                        }
+                      }
+                    }}
+                    placeholder="Mobile No. (मोबाइल)"
+                    className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Bill print preview indicator */}
+              {(customerName || customerPhone) && (
+                <div className="px-2 py-1 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 rounded text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center justify-between">
+                  <span className="truncate">
+                    🧾 On Bill: <strong>{customerName.trim() || 'Walk-in'}</strong>
+                    {customerPhone && <span className="font-mono ml-1.5">• +91 {customerPhone}</span>}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 shrink-0 ml-1">
+                    (बिल पर प्रिंट होगा)
+                  </span>
+                </div>
+              )}
+
+              {/* Save customer checkbox & More details toggle */}
+              <div className="flex items-center justify-between pt-0.5 text-[11px]">
+                <label className="inline-flex items-center gap-1.5 text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={saveCustomerToDirectory}
+                    onChange={e => setSaveCustomerToDirectory(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-neutral-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>Save customer details (विवरण सेव करें)</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => setShowExtraDetailsModal(!showExtraDetailsModal)}
+                  className="text-emerald-600 dark:text-emerald-400 hover:underline text-[11px] font-medium"
+                >
+                  {showExtraDetailsModal ? 'Less Details' : '+ Extra Info (GST/Address)'}
+                </button>
+              </div>
+
+              {/* Extra Details Expandable (Address, GSTIN, Email) */}
+              {showExtraDetailsModal && (
+                <div className="p-2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg space-y-1.5 text-xs animate-in fade-in">
+                  <input
+                    type="text"
+                    value={customerAddress}
+                    onChange={e => setCustomerAddress(e.target.value)}
+                    placeholder="Customer Address / Location"
+                    className="w-full px-2 py-1 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden"
+                  />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input
+                      type="email"
+                      value={customerEmail}
+                      onChange={e => setCustomerEmail(e.target.value)}
+                      placeholder="Email Address"
+                      className="px-2 py-1 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden"
+                    />
+                    <input
+                      type="text"
+                      maxLength={15}
+                      value={customerGstin}
+                      onChange={e => setCustomerGstin(e.target.value.toUpperCase())}
+                      placeholder="GSTIN (If B2B)"
+                      className="px-2 py-1 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 uppercase font-mono focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bill Discount Row */}
+          <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400 pt-1 border-t border-neutral-200 dark:border-neutral-800/80">
+            <span>Bill Discount (%):</span>
+            <div className="flex items-center gap-1">
+              {[0, 5, 10, 15].map(pct => (
+                <button
+                  key={pct}
+                  onClick={() => setBillDiscountPercent(pct)}
+                  className={`px-2 py-0.5 text-[11px] rounded font-medium transition-colors ${
+                    billDiscountPercent === pct
+                      ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                      : 'bg-neutral-200/70 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                  }`}
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Bill Summary & Payment Section */}
+        <div className="p-3 sm:p-4 border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-3">
+          {/* Subtotals & Grand Total */}
+          <div className="space-y-1 text-xs">
+            <div className="flex justify-between text-neutral-600 dark:text-neutral-400">
+              <span>Subtotal:</span>
+              <span className="font-mono tabular-nums">₹{cartSubtotal.toFixed(2)}</span>
+            </div>
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-medium">
+                <span>Discount ({billDiscountPercent}%):</span>
+                <span className="font-mono tabular-nums">-₹{discountAmount.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-neutral-600 dark:text-neutral-400">
+              <span>GST / Tax:</span>
+              <span className="font-mono tabular-nums">₹{cartTaxTotal.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between text-base font-bold text-neutral-900 dark:text-neutral-100 pt-1 border-t border-neutral-200 dark:border-neutral-800">
+              <span>Total Payable:</span>
+              <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+                {formatCurrency(grandTotal, settings.currencySymbol)}
+              </span>
+            </div>
+          </div>
+
+          {/* Payment Method Selector */}
+          <div className="grid grid-cols-3 gap-1.5 pt-1">
+            <button
+              onClick={() => setPaymentMethod('cash')}
+              className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 border transition-colors ${
+                paymentMethod === 'cash'
+                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <Banknote className="w-3.5 h-3.5" />
+              <span>Cash</span>
+            </button>
+
+            <button
+              onClick={() => setPaymentMethod('upi')}
+              className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 border transition-colors ${
+                paymentMethod === 'upi'
+                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>UPI / QR</span>
+            </button>
+
+            <button
+              onClick={() => setPaymentMethod('card')}
+              className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 border transition-colors ${
+                paymentMethod === 'card'
+                  ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                  : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>Card</span>
+            </button>
+          </div>
+
+          {/* Cash Tender Quick Calculator */}
+          {paymentMethod === 'cash' && cart.length > 0 && (
+            <div className="p-2.5 rounded-lg bg-neutral-100 dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700/60 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-neutral-600 dark:text-neutral-400">Cash Received:</span>
+                <div className="flex items-center gap-1 font-mono">
+                  <span>₹</span>
+                  <input
+                    type="number"
+                    value={cashTendered}
+                    onChange={e => setCashTendered(e.target.value ? Number(e.target.value) : '')}
+                    className="w-24 px-2 py-1 text-right text-xs bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-600 rounded font-semibold text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Note Buttons */}
+              <div className="flex gap-1 justify-end">
+                {[
+                  { label: 'Exact', val: grandTotal },
+                  { label: '₹100', val: 100 },
+                  { label: '₹200', val: 200 },
+                  { label: '₹500', val: 500 },
+                  { label: '₹2000', val: 2000 },
+                ].map(b => (
+                  <button
+                    key={b.label}
+                    onClick={() => setCashTendered(b.val)}
+                    className="px-2 py-0.5 text-[10px] font-mono font-medium rounded bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Change Return */}
+              <div className="flex justify-between items-center text-xs font-semibold pt-1 border-t border-neutral-200 dark:border-neutral-700">
+                <span className="text-neutral-700 dark:text-neutral-300">Change to Return:</span>
+                <span className="text-emerald-700 dark:text-emerald-400 font-mono text-sm tabular-nums">
+                  ₹{changeDue.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Checkout & Print Preview Action Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenPrintPreview}
+              disabled={cart.length === 0 || isProcessing}
+              className="py-2.5 px-3 rounded-lg font-semibold text-xs text-neutral-700 dark:text-neutral-200 bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 border border-neutral-300 dark:border-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs flex items-center justify-center gap-1.5 shrink-0"
+              title="Print Preview & Receipt Formatting (F10)"
+            >
+              <Printer className="w-4 h-4 text-neutral-600 dark:text-neutral-400" />
+              <span>Preview</span>
+              <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">(F10)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCheckoutSubmit}
+              disabled={cart.length === 0 || isProcessing}
+              className="flex-1 py-2.5 px-4 rounded-lg font-semibold text-sm text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-xs flex items-center justify-center gap-2"
+            >
+              <Check className="w-4 h-4" />
+              <span>Complete Checkout (F9)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Barcode Scanner Modal */}
+      <BarcodeScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onBarcodeDetected={handleBarcodeScanned}
+      />
+
+      {/* Generated / Completed Invoice Print Preview Modal */}
+      <PrintPreviewModal
+        invoice={activeInvoice}
+        isOpen={!!activeInvoice}
+        onClose={() => setActiveInvoice(null)}
+      />
+
+      {/* Draft Bill Print Preview Modal (Live Cart Preview Before Sale) */}
+      <PrintPreviewModal
+        invoice={draftInvoice}
+        isOpen={isDraftPreviewOpen}
+        isDraft={true}
+        onCompleteSale={handleCheckoutSubmit}
+        onClose={() => {
+          setIsDraftPreviewOpen(false);
+          setDraftInvoice(null);
+        }}
+      />
+    </div>
+  );
+};
