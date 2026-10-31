@@ -33,11 +33,13 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const navLinks: { id: ActiveTab; label: string }[] = [
     { id: 'pos', label: 'POS Billing' },
+    { id: 'setup', label: '+ Add Data' },
     { id: 'inventory', label: 'Inventory' },
     { id: 'customers', label: 'Customers' },
     { id: 'invoices', label: 'Invoices' },
     { id: 'analytics', label: 'Reports' },
     { id: 'users', label: 'Team Roles' },
+    { id: 'license', label: 'License' },
     { id: 'settings', label: 'Settings' },
   ];
 
@@ -51,9 +53,8 @@ export const TopNav: React.FC<TopNavProps> = ({
             e.preventDefault();
             setActiveTab('pos');
           }}
-          className="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2"
+          className="text-lg font-bold tracking-tight text-neutral-900 dark:text-neutral-100"
         >
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
           VyaparPOS
         </a>
 

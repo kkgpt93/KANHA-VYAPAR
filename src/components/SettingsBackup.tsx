@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Save,
   Download,
   Upload,
-  RotateCcw,
+  Trash2,
   Bell,
   Volume2,
   VolumeX,
@@ -12,10 +12,12 @@ import {
   WifiOff,
   CheckCircle2,
   Building2,
-  AlertTriangle,
+  KeyRound,
+  Link2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { StoreSettings } from '../types';
+import { formatDate } from '../utils/formatters';
 
 export const SettingsBackup: React.FC = () => {
   const {
@@ -23,15 +25,34 @@ export const SettingsBackup: React.FC = () => {
     updateSettings,
     exportBackup,
     importBackup,
-    reloadDemoData,
+    clearAllData,
     isOffline,
     requestPushPermission,
     addNotification,
+    licenseState,
+    licenseEvaluation,
+    setActiveTab,
+    pendingEntryAction,
+    clearPendingEntryAction,
   } = useApp();
 
   const [formData, setFormData] = useState<StoreSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [confirmClean, setConfirmClean] = useState(false);
+  const storeNameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setFormData({ ...settings });
+  }, [settings]);
+
+  useEffect(() => {
+    if (pendingEntryAction === 'store-profile') {
+      storeNameInputRef.current?.focus();
+      storeNameInputRef.current?.select();
+      clearPendingEntryAction();
+    }
+  }, [pendingEntryAction, clearPendingEntryAction]);
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +115,8 @@ export const SettingsBackup: React.FC = () => {
         type: 'system',
       });
     } else {
-      alert('Notification permission was not granted by your browser.');
+      setImportStatus('Notification permission was not granted by your browser.');
+      setTimeout(() => setImportStatus(null), 3500);
     }
   };
 
@@ -107,7 +129,7 @@ export const SettingsBackup: React.FC = () => {
             Store Profile, Backup & Offline Sync
           </h2>
           <p className="text-xs text-neutral-500 mt-0.5">
-            Manage tax configurations, UPI payment address, social links, and system exports
+            Manage tax configurations, annual license, UPI payment address, and system exports
           </p>
         </div>
 
@@ -120,6 +142,32 @@ export const SettingsBackup: React.FC = () => {
       </div>
 
       <div className="p-4 lg:p-6 space-y-6 max-w-5xl w-full mx-auto">
+        {/* Annual Software License & Keygen Quick Card */}
+        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center">
+              <KeyRound className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
+                Annual Software License ({licenseEvaluation.daysRemaining} Days Remaining)
+              </h3>
+              <p className="text-xs text-neutral-500 font-mono tabular-nums">
+                System ID: {licenseState.installationId}
+                {licenseState.expiresAt ? ` · Valid Until: ${formatDate(licenseState.expiresAt)}` : ''}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('license')}
+            className="px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 transition-opacity cursor-pointer"
+          >
+            Manage License & Keygen
+          </button>
+        </div>
+
         {/* Offline & System Sync Status Card */}
         <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -162,10 +210,12 @@ export const SettingsBackup: React.FC = () => {
                   Store / Business Name *
                 </label>
                 <input
+                  ref={storeNameInputRef}
                   type="text"
                   required
                   value={formData.storeName}
                   onChange={e => setFormData({ ...formData, storeName: e.target.value })}
+                  placeholder="Enter your shop / business name"
                   className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden focus:border-emerald-500 font-semibold"
                 />
               </div>
@@ -220,14 +270,13 @@ export const SettingsBackup: React.FC = () => {
 
               <div className="space-y-1">
                 <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                  UPI VPA (QR Code Payment on Bill) *
+                  UPI VPA (QR Code Payment on Bill)
                 </label>
                 <input
                   type="text"
-                  required
                   value={formData.upiVpa}
                   onChange={e => setFormData({ ...formData, upiVpa: e.target.value })}
-                  placeholder="storename@okhdfcbank"
+                  placeholder="yourshop@okhdfcbank"
                   className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono text-emerald-700 dark:text-emerald-400 font-semibold focus:outline-hidden"
                 />
               </div>
@@ -434,19 +483,49 @@ export const SettingsBackup: React.FC = () => {
               />
             </label>
 
-            {/* Reset to Demo Data */}
+            {/* Open New Data Links Hub */}
             <button
-              onClick={() => {
-                if (confirm('Reset entire system with fresh demo catalog and sample invoices?')) {
-                  reloadDemoData();
-                  alert('Demo data reloaded successfully.');
-                }
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-colors ml-auto"
+              type="button"
+              onClick={() => setActiveTab('setup')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg transition-colors cursor-pointer"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset to Sample Demo Data</span>
+              <Link2 className="w-3.5 h-3.5" />
+              <span>New Data Entry Links</span>
             </button>
+
+            {/* Clean All Store Data (Inline 2-Step Confirmation, zero alert/confirm) */}
+            {!confirmClean ? (
+              <button
+                type="button"
+                onClick={() => setConfirmClean(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-colors ml-auto cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clean All Store Data</span>
+              </button>
+            ) : (
+              <div className="inline-flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearAllData();
+                    setConfirmClean(false);
+                    setImportStatus('सभी स्टोर डेटा सफलतापूर्वक साफ (Clean) कर दिया गया है!');
+                    setTimeout(() => setImportStatus(null), 3500);
+                  }}
+                  className="px-3 py-1.5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg cursor-pointer"
+                >
+                  Confirm Wipe All Data
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClean(false)}
+                  className="px-2.5 py-1.5 text-xs font-medium border border-neutral-300 dark:border-neutral-700 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

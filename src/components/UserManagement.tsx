@@ -1,15 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Users,
   Shield,
   Fingerprint,
-  Key,
   Plus,
   Trash2,
-  Check,
   X,
-  UserCheck,
-  Lock,
+  Edit2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { User, RoleType } from '../types';
@@ -20,11 +16,15 @@ export const UserManagement: React.FC = () => {
     activeUser,
     switchUser,
     addUser,
+    updateUser,
     deleteUser,
     registerBiometricsForUser,
+    pendingEntryAction,
+    clearPendingEntryAction,
   } = useApp();
 
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserRole, setNewUserRole] = useState<RoleType>('cashier');
@@ -32,6 +32,19 @@ export const UserManagement: React.FC = () => {
   const [pinPromptUser, setPinPromptUser] = useState<User | null>(null);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pendingEntryAction === 'add-staff') {
+      setEditingUser(null);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserRole('cashier');
+      setNewUserPin('1234');
+      setIsAddUserOpen(true);
+      clearPendingEntryAction();
+    }
+  }, [pendingEntryAction, clearPendingEntryAction]);
 
   const roleDescriptions: Record<RoleType, { label: string; desc: string; access: string }> = {
     admin: {
@@ -76,23 +89,51 @@ export const UserManagement: React.FC = () => {
     }
   };
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const openAddStaffModal = () => {
+    setEditingUser(null);
+    setNewUserName('');
+    setNewUserEmail('');
+    setNewUserRole('cashier');
+    setNewUserPin('1234');
+    setIsAddUserOpen(true);
+  };
+
+  const openEditUserModal = (u: User) => {
+    setEditingUser(u);
+    setNewUserName(u.name);
+    setNewUserEmail(u.email || '');
+    setNewUserRole(u.role);
+    setNewUserPin(u.pin);
+    setIsAddUserOpen(true);
+  };
+
+  const handleSaveUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserName.trim() || newUserPin.length < 4) return;
 
-    const colors = ['bg-emerald-600', 'bg-blue-600', 'bg-purple-600', 'bg-amber-600', 'bg-rose-600'];
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    if (editingUser) {
+      updateUser(editingUser.id, {
+        name: newUserName.trim(),
+        email: newUserEmail.trim(),
+        role: newUserRole,
+        pin: newUserPin,
+      });
+    } else {
+      const colors = ['bg-emerald-600', 'bg-blue-600', 'bg-purple-600', 'bg-amber-600', 'bg-rose-600'];
+      const randomColor = colors[Math.floor(Math.random() * colors.length)];
 
-    addUser({
-      name: newUserName.trim(),
-      email: newUserEmail.trim() || `${newUserName.toLowerCase().replace(/\s+/g, '')}@vyaparmart.in`,
-      role: newUserRole,
-      pin: newUserPin,
-      avatarColor: randomColor,
-      hasBiometrics: false,
-    });
+      addUser({
+        name: newUserName.trim(),
+        email: newUserEmail.trim(),
+        role: newUserRole,
+        pin: newUserPin,
+        avatarColor: randomColor,
+        hasBiometrics: false,
+      });
+    }
 
     setIsAddUserOpen(false);
+    setEditingUser(null);
     setNewUserName('');
     setNewUserEmail('');
     setNewUserPin('1234');
@@ -117,8 +158,8 @@ export const UserManagement: React.FC = () => {
 
         {activeUser.role === 'admin' && (
           <button
-            onClick={() => setIsAddUserOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors"
+            onClick={openAddStaffModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Add Team Member</span>
@@ -171,16 +212,41 @@ export const UserManagement: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Delete button if admin and not only user */}
-                    {activeUser.role === 'admin' && users.length > 1 && !isActive && (
-                      <button
-                        onClick={() => {
-                          if (confirm(`Remove ${u.name}?`)) deleteUser(u.id);
-                        }}
-                        className="text-neutral-400 hover:text-rose-600 p-1 rounded transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    {/* Edit & Delete actions for Admin */}
+                    {activeUser.role === 'admin' && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditUserModal(u)}
+                          title="Edit Name / Role / PIN"
+                          className="text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 p-1 rounded transition-colors cursor-pointer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {users.length > 1 && !isActive && (
+                          confirmDeleteUserId === u.id ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                deleteUser(u.id);
+                                setConfirmDeleteUserId(null);
+                              }}
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-rose-600 text-white rounded cursor-pointer"
+                            >
+                              Confirm
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteUserId(u.id)}
+                              title="Remove Staff"
+                              className="text-neutral-400 hover:text-rose-600 p-1 rounded transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -309,23 +375,26 @@ export const UserManagement: React.FC = () => {
         </div>
       )}
 
-      {/* Add User Modal */}
+      {/* Add / Edit User Modal */}
       {isAddUserOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
           <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-md w-full p-5 shadow-2xl border border-neutral-200 dark:border-neutral-800 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
-                Add New Staff Member
+                {editingUser ? `Edit Operator: ${editingUser.name}` : 'Add New Staff Member'}
               </h3>
               <button
-                onClick={() => setIsAddUserOpen(false)}
-                className="text-neutral-400 hover:text-neutral-600"
+                onClick={() => {
+                  setIsAddUserOpen(false);
+                  setEditingUser(null);
+                }}
+                className="text-neutral-400 hover:text-neutral-600 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateUser} className="space-y-3">
+            <form onSubmit={handleSaveUser} className="space-y-3">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
                   Full Name *
@@ -365,7 +434,7 @@ export const UserManagement: React.FC = () => {
                     type="email"
                     value={newUserEmail}
                     onChange={e => setNewUserEmail(e.target.value)}
-                    placeholder="staff@vyaparmart.in"
+                    placeholder="owner@mystore.in"
                     className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden"
                   />
                 </div>
@@ -375,7 +444,7 @@ export const UserManagement: React.FC = () => {
                   </label>
                   <input
                     type="password"
-                    maxLength={4}
+                    maxLength={6}
                     required
                     value={newUserPin}
                     onChange={e => setNewUserPin(e.target.value)}
@@ -388,16 +457,19 @@ export const UserManagement: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">
                 <button
                   type="button"
-                  onClick={() => setIsAddUserOpen(false)}
-                  className="px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-100 rounded-lg"
+                  onClick={() => {
+                    setIsAddUserOpen(false);
+                    setEditingUser(null);
+                  }}
+                  className="px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-100 rounded-lg cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg"
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
                 >
-                  Create Staff
+                  {editingUser ? 'Save Changes' : 'Create Staff'}
                 </button>
               </div>
             </form>

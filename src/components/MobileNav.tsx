@@ -7,6 +7,8 @@ import {
   Users,
   Settings,
   Contact,
+  KeyRound,
+  PlusCircle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ActiveTab } from '../types';
@@ -21,11 +23,11 @@ export const MobileNav: React.FC = () => {
       icon: <ShoppingBag className="w-4 h-4" />,
       badge: cart.length > 0 ? cart.reduce((s, i) => s + i.quantity, 0) : undefined,
     },
+    { id: 'setup', label: 'Add Data', icon: <PlusCircle className="w-4 h-4" /> },
     { id: 'inventory', label: 'Stock', icon: <Package className="w-4 h-4" /> },
     { id: 'customers', label: 'Clients', icon: <Contact className="w-4 h-4" /> },
     { id: 'invoices', label: 'Invoices', icon: <FileText className="w-4 h-4" /> },
-    { id: 'analytics', label: 'Reports', icon: <BarChart3 className="w-4 h-4" /> },
-    { id: 'users', label: 'Staff', icon: <Users className="w-4 h-4" /> },
+    { id: 'license', label: 'License', icon: <KeyRound className="w-4 h-4" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
   ];
 

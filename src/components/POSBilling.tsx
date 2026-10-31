@@ -24,6 +24,9 @@ import {
   FileText,
   Printer,
   Eye,
+  Link2,
+  Building2,
+  PackagePlus,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Product, PaymentMethod, Invoice, Customer } from '../types';
@@ -46,6 +49,10 @@ export const POSBilling: React.FC = () => {
     settings,
     activeUser,
     invoices,
+    setActiveTab,
+    triggerQuickEntry,
+    pendingEntryAction,
+    clearPendingEntryAction,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,6 +100,13 @@ export const POSBilling: React.FC = () => {
       setCustomerNotes(selectedPosCustomer.notes || '');
     }
   }, [selectedPosCustomer]);
+
+  useEffect(() => {
+    if (pendingEntryAction === 'new-bill') {
+      searchInputRef.current?.focus();
+      clearPendingEntryAction();
+    }
+  }, [pendingEntryAction, clearPendingEntryAction]);
 
   // Autocomplete customer search results
   const matchingCustomers = useMemo(() => {
@@ -404,7 +418,59 @@ export const POSBilling: React.FC = () => {
 
         {/* Products Grid */}
         <div className="flex-1 p-3 sm:p-4 overflow-y-auto">
-          {filteredProducts.length === 0 ? (
+          {products.length === 0 ? (
+            <div className="max-w-xl mx-auto my-6 p-6 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-5">
+              <div className="space-y-1">
+                <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                  Clean Store Ready · पुराना डेमो डेटा साफ है
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                  अपना नया स्टोर डेटा जोड़ना शुरू करें
+                </h3>
+                <p className="text-xs text-neutral-500 leading-relaxed">
+                  सभी पहले के सैंपल प्रोडक्ट्स, ग्राहक और बिल हटा दिए गए हैं। नीचे दिए बटन या डायरेक्ट लिंक हब से अपनी दुकान का नया डेटा जोड़ें:
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => triggerQuickEntry('add-product')}
+                  className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <PackagePlus className="w-4 h-4" />
+                  <span>+ Add New Product</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => triggerQuickEntry('store-profile')}
+                  className="px-4 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Building2 className="w-4 h-4" />
+                  <span>Set Store Name & UPI</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => triggerQuickEntry('add-customer')}
+                  className="px-4 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-medium inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>+ Add New Customer</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('setup')}
+                  className="px-4 py-2.5 rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 text-xs font-semibold inline-flex items-center justify-center gap-2 transition-opacity cursor-pointer"
+                >
+                  <Link2 className="w-4 h-4" />
+                  <span>All Data Entry Links</span>
+                </button>
+              </div>
+            </div>
+          ) : filteredProducts.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-center text-neutral-400">
               <ShoppingBag className="w-12 h-12 mb-2 opacity-40 stroke-1" />
               <p className="text-sm font-medium text-neutral-600 dark:text-neutral-300">

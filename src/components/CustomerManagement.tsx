@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Users,
   Search,
@@ -35,6 +35,8 @@ export const CustomerManagement: React.FC = () => {
     deleteCustomer,
     selectCustomerForPOS,
     settings,
+    pendingEntryAction,
+    clearPendingEntryAction,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -154,6 +156,13 @@ export const CustomerManagement: React.FC = () => {
     setFormError(null);
     setIsAddModalOpen(true);
   };
+
+  useEffect(() => {
+    if (pendingEntryAction === 'add-customer') {
+      handleOpenAddModal();
+      clearPendingEntryAction();
+    }
+  }, [pendingEntryAction, clearPendingEntryAction]);
 
   // Open Edit modal
   const handleOpenEditModal = (c: Customer) => {

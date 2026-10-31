@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Plus,
   Search,
@@ -19,7 +19,17 @@ import { Product } from '../types';
 import { formatCurrency, generateBarcode } from '../utils/formatters';
 
 export const InventoryManagement: React.FC = () => {
-  const { products, addProduct, updateProduct, deleteProduct, adjustStock, settings, activeUser } = useApp();
+  const {
+    products,
+    addProduct,
+    updateProduct,
+    deleteProduct,
+    adjustStock,
+    settings,
+    activeUser,
+    pendingEntryAction,
+    clearPendingEntryAction,
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -90,6 +100,13 @@ export const InventoryManagement: React.FC = () => {
     setTaxRate(5);
     setIsModalOpen(true);
   };
+
+  useEffect(() => {
+    if (pendingEntryAction === 'add-product') {
+      openAddModal();
+      clearPendingEntryAction();
+    }
+  }, [pendingEntryAction, clearPendingEntryAction]);
 
   const openEditModal = (p: Product) => {
     setEditingProduct(p);

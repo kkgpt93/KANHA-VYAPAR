@@ -117,4 +117,83 @@ export interface StoreSettings {
   defaultTaxRate: number;
 }
 
-export type ActiveTab = 'pos' | 'inventory' | 'customers' | 'invoices' | 'analytics' | 'users' | 'settings';
+export type ActiveTab =
+  | 'pos'
+  | 'setup'
+  | 'inventory'
+  | 'customers'
+  | 'invoices'
+  | 'analytics'
+  | 'users'
+  | 'license'
+  | 'settings';
+
+export type QuickEntryAction =
+  | 'setup-hub'
+  | 'store-profile'
+  | 'add-product'
+  | 'add-customer'
+  | 'add-staff'
+  | 'new-bill';
+
+export interface LicenseHistoryRecord {
+  id: string;
+  licenseKey: string;
+  activatedAt: string;
+  expiresAt: string;
+  durationDays: number;
+  planLabel: string;
+  activatedBy: string;
+  isDeviceBound: boolean;
+}
+
+export interface LicenseState {
+  installationId: string;
+  activeKey: string | null;
+  activatedAt: string | null;
+  expiresAt: string | null;
+  durationDays: number;
+  planLabel: string;
+  usedKeys: string[];
+  history: LicenseHistoryRecord[];
+  lastVerifiedAt: string;
+}
+
+export interface GeneratedKeyRecord {
+  id: string;
+  licenseKey: string;
+  clientName: string;
+  clientPhone?: string;
+  targetInstallationId?: string;
+  durationDays: number;
+  planLabel: string;
+  createdAt: string;
+  notes?: string;
+}
+
+export interface CreatorConfig {
+  creatorIdHash: string;
+  creatorPasswordHash: string;
+  vendorName: string;
+  vendorPhone: string;
+  failedAttempts: number;
+  lockoutUntil: string | null;
+}
+
+export type LicenseStatusType =
+  | 'unactivated'
+  | 'active'
+  | 'expiring_soon'
+  | 'expired'
+  | 'clock_tampered';
+
+export interface LicenseEvaluation {
+  status: LicenseStatusType;
+  isLockedByLicense: boolean;
+  daysRemaining: number;
+  totalDays: number;
+  progressPercent: number;
+  expiresAt: string | null;
+  activatedAt: string | null;
+}
+
