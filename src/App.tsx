@@ -33,6 +33,26 @@ const MainLayout: React.FC = () => {
         onLockTerminal={() => setIsLocked(true)}
       />
 
+      {/* 2-Day Public License Countdown Strip */}
+      {licenseEvaluation.status === 'public_trial_active' && (
+        <div className="px-4 lg:px-6 py-2 bg-neutral-900 text-neutral-100 dark:bg-neutral-900 border-b border-neutral-800 text-xs flex flex-wrap items-center justify-between gap-2 no-print">
+          <span>
+            2-दिवसीय पब्लिक लाइसेंस सक्रिय है —{' '}
+            <strong className="font-mono tabular-nums text-amber-400">
+              {licenseEvaluation.hoursRemaining} घंटे शेष
+            </strong>{' '}
+            (कुल 2 दिन / 48 घंटे वैधता)। स्थायी उपयोग के लिए 1-वर्षीय लाइसेंस की या Creator Login चुनें।
+          </span>
+          <button
+            type="button"
+            onClick={() => setActiveTab('license')}
+            className="px-3 py-1 text-xs font-semibold rounded-md bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer"
+          >
+            Upgrade / Switch Login
+          </button>
+        </div>
+      )}
+
       {/* Annual License Renewal Reminder Strip (30 days or less remaining) */}
       {licenseEvaluation.status === 'expiring_soon' && (
         <div className="px-4 lg:px-6 py-2 bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-900 text-xs text-amber-900 dark:text-amber-200 flex flex-wrap items-center justify-between gap-2 no-print">

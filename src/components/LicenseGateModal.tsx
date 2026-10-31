@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   KeyRound,
   ShieldAlert,
@@ -9,47 +9,84 @@ import {
   ArrowRight,
   Clock,
   ExternalLink,
-  X,
   Eye,
   EyeOff,
   LogOut,
+  Users,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatLicenseKeyInput } from '../utils/license';
+import {
+  formatLicenseKeyInput,
+  PUBLIC_LOGIN_ID,
+  PUBLIC_LOGIN_PASSWORD,
+  PUBLIC_2DAY_LICENSE_KEY,
+} from '../utils/license';
 import { formatDateTime } from '../utils/formatters';
+import { COLOR_THEMES } from '../utils/themes';
+
+type GateTab = 'public' | 'annual' | 'creator';
 
 export const LicenseGateModal: React.FC = () => {
   const {
     licenseState,
     licenseEvaluation,
     activateLicenseKey,
+    loginWithPublicLicense,
+    loginAsCreatorLifetime,
     settings,
     exportBackup,
     creatorConfig,
     verifyCreatorCredentials,
     generateNewLicenseKey,
+    colorTheme,
+    setColorTheme,
   } = useApp();
 
+  const isPublicExpired =
+    licenseState.publicTrialUsed &&
+    Boolean(licenseState.publicTrialExpiresAt) &&
+    Date.now() >= new Date(licenseState.publicTrialExpiresAt!).getTime();
+
+  const [gateTab, setGateTab] = useState<GateTab>(() => (isPublicExpired ? 'annual' : 'public'));
+
+  // Public 2-Day Login State
+  const [publicIdInput, setPublicIdInput] = useState(PUBLIC_LOGIN_ID);
+  const [publicPassInput, setPublicPassInput] = useState(PUBLIC_LOGIN_PASSWORD);
+  const [publicKeyInput, setPublicKeyInput] = useState(PUBLIC_2DAY_LICENSE_KEY);
+  const [showPublicPass, setShowPublicPass] = useState(false);
+  const [publicFeedback, setPublicFeedback] = useState<{
+    type: 'error' | 'success';
+    text: string;
+  } | null>(null);
+
+  // Annual 1-Year Key State
   const [keyInput, setKeyInput] = useState('');
-  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(
-    null
-  );
+  const [annualFeedback, setAnnualFeedback] = useState<{
+    type: 'error' | 'success';
+    text: string;
+  } | null>(null);
   const [copiedId, setCopiedId] = useState(false);
 
-  // Embedded Creator Keygen modal state on lock screen (strictly Creator ID + Password protected)
-  const [showCreatorDrawer, setShowCreatorDrawer] = useState(false);
-  const [creatorUnlocked, setCreatorUnlocked] = useState(false);
+  // Creator Login (Always Valid + Key Generator) State — ZERO UI HINTS
   const [creatorIdInput, setCreatorIdInput] = useState('');
   const [creatorPasswordInput, setCreatorPasswordInput] = useState('');
   const [showCreatorPassword, setShowCreatorPassword] = useState(false);
-  const [authError, setAuthError] = useState('');
+  const [creatorError, setCreatorError] = useState('');
+  const [creatorKeygenOnlyUnlocked, setCreatorKeygenOnlyUnlocked] = useState(false);
 
-  // Quick generator state
+  // Quick generator state (when Creator chooses Key Generator Only on customer PC)
   const [genClientName, setGenClientName] = useState(settings.storeName || 'Retail Store');
   const [genDays, setGenDays] = useState<number>(365);
   const [bindToThisDevice, setBindToThisDevice] = useState<boolean>(true);
   const [latestGeneratedKey, setLatestGeneratedKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
+
+  useEffect(() => {
+    if (isPublicExpired && gateTab === 'public') {
+      setGateTab('annual');
+    }
+  }, [isPublicExpired]);
 
   if (!licenseEvaluation.isLockedByLicense) {
     return null;
@@ -64,63 +101,74 @@ export const LicenseGateModal: React.FC = () => {
       setCopiedId(true);
       setTimeout(() => setCopiedId(false), 2000);
     } catch {
-      // ignore clipboard restriction
+      // ignore
     }
   };
 
-  const handleActivateSubmit = (e: React.FormEvent) => {
+  const handlePublicLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = loginWithPublicLicense(publicIdInput, publicPassInput, publicKeyInput);
+    if (res.ok) {
+      setPublicFeedback({ type: 'success', text: res.message });
+    } else {
+      setPublicFeedback({ type: 'error', text: res.message });
+    }
+  };
+
+  const handleFillPublicCredentials = () => {
+    setPublicIdInput(PUBLIC_LOGIN_ID);
+    setPublicPassInput(PUBLIC_LOGIN_PASSWORD);
+    setPublicKeyInput(PUBLIC_2DAY_LICENSE_KEY);
+    setPublicFeedback(null);
+  };
+
+  const handleAnnualActivateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!keyInput.trim()) {
-      setFeedback({
+      setAnnualFeedback({
         type: 'error',
-        text: 'कृपया अपनी नई लाइसेंस की (License Key) दर्ज करें।',
+        text: 'कृपया अपनी 1-वर्षीय लाइसेंस की (License Key) दर्ज करें।',
       });
       return;
     }
 
     const res = activateLicenseKey(keyInput);
     if (res.ok) {
-      setFeedback({ type: 'success', text: res.message });
+      setAnnualFeedback({ type: 'success', text: res.message });
       setKeyInput('');
     } else {
-      setFeedback({ type: 'error', text: res.message });
+      setAnnualFeedback({ type: 'error', text: res.message });
     }
   };
 
-  const handleEmergencyBackup = () => {
-    const json = exportBackup();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `VyaparPOS_Backup_${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   const resetCreatorSession = () => {
-    setCreatorUnlocked(false);
+    setCreatorKeygenOnlyUnlocked(false);
     setCreatorIdInput('');
     setCreatorPasswordInput('');
     setShowCreatorPassword(false);
-    setAuthError('');
+    setCreatorError('');
   };
 
-  const handleUnlockCreator = (e: React.FormEvent) => {
+  const handleCreatorAlwaysValidSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const res = loginAsCreatorLifetime(creatorIdInput, creatorPasswordInput);
+    if (res.ok) {
+      resetCreatorSession();
+    } else {
+      setCreatorError(res.message);
+    }
+  };
+
+  const handleOpenCreatorKeygenOnly = () => {
     const res = verifyCreatorCredentials(creatorIdInput, creatorPasswordInput);
     if (res.ok) {
-      setCreatorUnlocked(true);
+      setCreatorKeygenOnlyUnlocked(true);
       setCreatorIdInput('');
       setCreatorPasswordInput('');
       setShowCreatorPassword(false);
-      setAuthError('');
+      setCreatorError('');
     } else {
-      setAuthError(
-        res.error || 'अमान्य क्रिएटर ID या पासवर्ड (Invalid Creator Credentials)।'
-      );
+      setCreatorError(res.error || 'अमान्य क्रिएटर ID या पासवर्ड!');
     }
   };
 
@@ -146,12 +194,23 @@ export const LicenseGateModal: React.FC = () => {
     }
   };
 
+  const handleEmergencyBackup = () => {
+    const json = exportBackup();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `VyaparPOS_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const whatsappRenewalMessage = encodeURIComponent(
     [
       `नमस्ते ${creatorConfig.vendorName || 'Admin'},`,
-      `हमारे POS सॉफ्टवेयर (${settings.storeName}) का वार्षिक लाइसेंस ${
-        isExpired ? 'समाप्त हो गया है' : 'सक्रिय करना है'
-      }।`,
+      `हमें VyaparPOS सॉफ्टवेयर (${settings.storeName}) के लिए 1-वर्षीय लाइसेंस की चाहिए।`,
       `System Installation ID: *${licenseState.installationId}*`,
       ...(licenseState.activeKey ? [`Previous Key: ${licenseState.activeKey}`] : []),
       `कृपया अगले 1 वर्ष (365 Days) के लिए नई लाइसेंस की जारी करें।`,
@@ -164,18 +223,18 @@ export const LicenseGateModal: React.FC = () => {
     : `https://wa.me/?text=${whatsappRenewalMessage}`;
 
   return (
-    <div className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
+    <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
       <div className="w-full max-w-4xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl shadow-2xl overflow-hidden my-auto">
         <div className="grid grid-cols-1 lg:grid-cols-12">
-          {/* Left Context & System Identity Column */}
-          <div className="lg:col-span-5 p-6 sm:p-8 bg-neutral-50 dark:bg-neutral-950/60 border-b lg:border-b-0 lg:border-r border-neutral-200 dark:border-neutral-800 flex flex-col justify-between gap-6">
+          {/* Left Signature Jewel Showcase & System Identity Column */}
+          <div className="lg:col-span-5 p-6 sm:p-8 brand-command-surface text-white border-b lg:border-b-0 lg:border-r flex flex-col justify-between gap-6">
             <div className="space-y-5">
               <div className="flex items-center gap-3">
                 <div
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center ${
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center border ${
                     isExpired || isClockTampered
-                      ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400'
-                      : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                      ? 'bg-rose-500/20 border-rose-400/30 text-rose-200'
+                      : 'bg-white/12 border-white/20 brand-gold-text'
                   }`}
                 >
                   {isExpired || isClockTampered ? (
@@ -185,45 +244,49 @@ export const LicenseGateModal: React.FC = () => {
                   )}
                 </div>
                 <div>
-                  <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                    VyaparPOS Enterprise
+                  <div className="text-xs text-white/75">
+                    Vyapar<span className="brand-gold-text font-semibold">POS</span> Access Portal
                   </div>
-                  <h1 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                  <h1 className="text-lg font-bold text-white">
                     {isClockTampered
                       ? 'System Clock Error'
                       : isExpired
-                      ? 'Annual License Expired'
-                      : 'Activate Annual License'}
+                      ? licenseEvaluation.isPublicTrial
+                        ? '2-Day Public License Expired'
+                        : 'Annual License Expired'
+                      : 'Login & License Activation'}
                   </h1>
                 </div>
               </div>
 
-              <p className="text-sm text-neutral-600 dark:text-neutral-400 leading-relaxed">
+              <p className="text-sm text-white/85 leading-relaxed">
                 {isClockTampered
-                  ? 'सिस्टम की तारीख/समय पीछे किया गया है। कृपया कंप्यूटर की सही तारीख सेट करें या नया वार्षिक रिन्यूअल लाइसेंस की दर्ज करें।'
+                  ? 'सिस्टम की घड़ी/तारीख पीछे की गई है। कृपया सही समय सेट करें या नया 1-वर्षीय लाइसेंस की दर्ज करें।'
+                  : isExpired && licenseEvaluation.isPublicTrial
+                  ? 'आपकी 2 दिन (48 घंटे) की पब्लिक ट्रायल लाइसेंस अवधि समाप्त हो चुकी है। आगे बिलिंग जारी रखने के लिए 1-वर्षीय लाइसेंस की दर्ज करें या Creator Login से साइन इन करें।'
                   : isExpired
-                  ? 'आपके सॉफ्टवेयर की 1 वर्ष की लाइसेंस अवधि समाप्त हो चुकी है। आगे बिलिंग जारी रखने के लिए सॉफ्टवेयर प्रदाता से प्राप्त नई वार्षिक लाइसेंस की (New License Key) दर्ज करें।'
-                  : 'VyaparPOS का उपयोग शुरू करने के लिए 1-वर्षीय वैध लाइसेंस की (Annual License Key) दर्ज करें। प्रत्येक वर्ष रिन्यूअल पर नई लाइसेंस की आवश्यक होती है।'}
+                  ? 'आपके सॉफ्टवेयर की 1 वर्ष की लाइसेंस अवधि समाप्त हो चुकी है। आगे उपयोग के लिए नई 1-वर्षीय लाइसेंस की दर्ज करें।'
+                  : 'पब्लिक यूज़र 2 दिन के पब्लिक लाइसेंस के साथ लॉगिन कर सकते हैं, स्टोर ओनर 1-साल की लाइसेंस की डालें, और Creator हमेशा के लिए (Always Valid) लॉगिन कर सकते हैं।'}
               </p>
 
               {/* System Installation ID Box */}
-              <div className="p-4 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-2">
-                <div className="flex items-center justify-between text-xs text-neutral-500">
+              <div className="p-4 rounded-xl bg-white/10 border border-white/18 space-y-2">
+                <div className="flex items-center justify-between text-xs text-white/75">
                   <span>System Installation ID</span>
-                  <span>Share for Renewal</span>
+                  <span>Share for 1-Year Key</span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <code className="text-base font-bold font-mono tabular-nums text-neutral-900 dark:text-neutral-100 tracking-wider">
+                  <code className="text-base font-bold font-mono tabular-nums brand-gold-text tracking-wider">
                     {licenseState.installationId}
                   </code>
                   <button
                     type="button"
                     onClick={handleCopyInstallationId}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white/15 hover:bg-white/25 text-white transition-colors cursor-pointer"
                   >
                     {copiedId ? (
                       <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <Check className="w-3.5 h-3.5 text-amber-300" />
                         <span>Copied</span>
                       </>
                     ) : (
@@ -234,50 +297,43 @@ export const LicenseGateModal: React.FC = () => {
                     )}
                   </button>
                 </div>
-                <div className="text-[11px] text-neutral-500 pt-1 border-t border-neutral-100 dark:border-neutral-800 flex items-center justify-between">
-                  <span className="truncate">{settings.storeName}</span>
+                <div className="text-[11px] text-white/75 pt-1 border-t border-white/15 flex items-center justify-between">
+                  <span>Public: 2 Days</span>
                   <span>·</span>
-                  <span>1-Year Cycle</span>
+                  <span>Store: 365 Days</span>
+                  <span>·</span>
+                  <span>Creator: Unlimited</span>
                 </div>
               </div>
 
-              {/* Previous Expiry Metadata if Expired */}
               {isExpired && licenseState.expiresAt && (
-                <div className="space-y-1.5 text-xs text-neutral-600 dark:text-neutral-400 pt-1">
+                <div className="space-y-1 text-xs text-white/80">
                   <div className="flex items-center justify-between">
                     <span>Expired On:</span>
-                    <span className="font-mono tabular-nums font-semibold text-rose-600 dark:text-rose-400">
+                    <span className="font-mono tabular-nums font-semibold text-rose-300">
                       {formatDateTime(licenseState.expiresAt)}
                     </span>
                   </div>
-                  {licenseState.activeKey && (
-                    <div className="flex items-center justify-between">
-                      <span>Previous Key (Expired):</span>
-                      <span className="font-mono tabular-nums text-neutral-500">
-                        {licenseState.activeKey.slice(0, 14)}...
-                      </span>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
 
-            {/* Bottom Safe Actions for Shopkeeper */}
-            <div className="space-y-2.5 pt-4 border-t border-neutral-200 dark:border-neutral-800">
+            {/* Bottom Safe Actions */}
+            <div className="space-y-2.5 pt-4 border-t border-white/15">
               <a
                 href={whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-lg brand-active-tab hover:opacity-95 transition-opacity"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>WhatsApp पर नई लाइसेंस की मांगें</span>
+                <span>WhatsApp पर 1-साल की लाइसेंस की मांगें</span>
               </a>
 
               <button
                 type="button"
                 onClick={handleEmergencyBackup}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium rounded-lg border border-white/20 bg-white/8 text-white hover:bg-white/15 transition-colors cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Safe Data Backup (.json)</span>
@@ -285,30 +341,244 @@ export const LicenseGateModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Right License Activation Form / Creator Panel */}
-          <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between gap-6">
-            {!showCreatorDrawer ? (
-              <div className="space-y-6 my-auto">
+          {/* Right Panel: 3-Mode Login & Activation Switcher */}
+          <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between gap-5">
+            {/* Compact Color Swatch Selector + Segmented Mode Tabs */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                <span>Select Access Mode</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="hidden sm:inline">Theme:</span>
+                  {COLOR_THEMES.map(theme => (
+                    <button
+                      key={theme.id}
+                      type="button"
+                      onClick={() => setColorTheme(theme.id)}
+                      title={`${theme.name} (${theme.nameHindi})`}
+                      className={`w-4 h-4 rounded-full transition-transform cursor-pointer ${
+                        colorTheme === theme.id
+                          ? 'ring-2 ring-offset-1 ring-neutral-900 dark:ring-white scale-110'
+                          : 'opacity-75 hover:opacity-100'
+                      }`}
+                      style={{ backgroundColor: theme.accentHex }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1 p-1 bg-neutral-100 dark:bg-neutral-800 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetCreatorSession();
+                    setGateTab('public');
+                  }}
+                  className={`py-2 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                    gateTab === 'public'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
+                  }`}
+                >
+                  Public (2 Days)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetCreatorSession();
+                    setGateTab('annual');
+                  }}
+                  className={`py-2 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                    gateTab === 'annual'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
+                  }`}
+                >
+                  1-Year Key
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setGateTab('creator')}
+                  className={`py-2 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                    gateTab === 'creator'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100'
+                  }`}
+                >
+                  Creator Login
+                </button>
+              </div>
+            </div>
+
+            {/* TAB 1: PUBLIC LOGIN + 2-DAY PUBLIC LICENSE */}
+            {gateTab === 'public' && (
+              <div className="space-y-4 my-auto">
                 <div>
-                  <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
-                    {isExpired
-                      ? 'नया वार्षिक लाइसेंस की दर्ज करें (Renew for 1 Year)'
-                      : 'लाइसेंस की दर्ज करें (Enter License Key)'}
+                  <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-emerald-600" />
+                    <span>Public Login (2-Day Valid Public License)</span>
                   </h2>
                   <p className="text-xs text-neutral-500 mt-1">
-                    {isExpired
-                      ? 'ध्यान दें: पुरानी उपयोग की गई लाइसेंस की दोबारा मान्य नहीं होगी। केवल नई जनरेट की गई की दर्ज करें।'
-                      : 'सॉफ्टवेयर प्रदाता द्वारा दी गई 20-अक्षरों की लाइसेंस की नीचे पेस्ट या टाइप करें।'}
+                    पब्लिक डेमो और ट्रायल के लिए यह लॉगिन व पब्लिक लाइसेंस की पूरे <strong>2 दिन (48 घंटे)</strong> के लिए मान्य है।
                   </p>
                 </div>
 
-                <form onSubmit={handleActivateSubmit} className="space-y-4">
-                  <div className="space-y-2">
+                {isPublicExpired ? (
+                  <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 space-y-3">
+                    <p className="text-xs font-semibold text-rose-700 dark:text-rose-300 leading-relaxed">
+                      इस सिस्टम पर 2-दिन (48 घंटे) का पब्लिक लाइसेंस पहले ही उपयोग होकर समाप्त हो चुका है!
+                    </p>
+                    <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                      आगे सॉफ्टवेयर चलाने के लिए कृपया 1-साल की नई लाइसेंस की दर्ज करें।
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setGateTab('annual')}
+                      className="px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-pointer"
+                    >
+                      Enter 1-Year License Key →
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* Public Credentials Info Box */}
+                    <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                      <div className="space-y-0.5 font-mono">
+                        <div>
+                          <span className="text-neutral-500">ID:</span>{' '}
+                          <strong className="text-neutral-900 dark:text-neutral-100">
+                            {PUBLIC_LOGIN_ID}
+                          </strong>{' '}
+                          <span className="text-neutral-400">·</span>{' '}
+                          <span className="text-neutral-500">Pass:</span>{' '}
+                          <strong className="text-neutral-900 dark:text-neutral-100">
+                            {PUBLIC_LOGIN_PASSWORD}
+                          </strong>
+                        </div>
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                          Key: {PUBLIC_2DAY_LICENSE_KEY}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleFillPublicCredentials}
+                        className="px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 shrink-0 cursor-pointer"
+                      >
+                        Auto-Fill
+                      </button>
+                    </div>
+
+                    <form onSubmit={handlePublicLoginSubmit} className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                            Public Login ID
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={publicIdInput}
+                            onChange={e => {
+                              setPublicIdInput(e.target.value.toUpperCase());
+                              if (publicFeedback) setPublicFeedback(null);
+                            }}
+                            className="w-full px-3 py-2 text-xs font-mono uppercase bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden focus:border-emerald-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                            Public Password
+                          </label>
+                          <div className="relative">
+                            <input
+                              type={showPublicPass ? 'text' : 'password'}
+                              required
+                              value={publicPassInput}
+                              onChange={e => {
+                                setPublicPassInput(e.target.value);
+                                if (publicFeedback) setPublicFeedback(null);
+                              }}
+                              className="w-full pl-3 pr-9 py-2 text-xs font-mono bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden focus:border-emerald-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPublicPass(p => !p)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 cursor-pointer"
+                            >
+                              {showPublicPass ? (
+                                <EyeOff className="w-3.5 h-3.5" />
+                              ) : (
+                                <Eye className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                          2-Day Public License Key
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={publicKeyInput}
+                          onChange={e => {
+                            setPublicKeyInput(formatLicenseKeyInput(e.target.value));
+                            if (publicFeedback) setPublicFeedback(null);
+                          }}
+                          className="w-full px-3 py-2.5 text-xs sm:text-sm font-mono uppercase tracking-wider bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden focus:border-emerald-500"
+                        />
+                      </div>
+
+                      {publicFeedback && (
+                        <div
+                          className={`p-3 rounded-lg text-xs border ${
+                            publicFeedback.type === 'error'
+                              ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300'
+                              : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300'
+                          }`}
+                        >
+                          {publicFeedback.text}
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer"
+                      >
+                        <span>Start 2-Day Public Access</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </form>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: 1-YEAR ANNUAL LICENSE KEY */}
+            {gateTab === 'annual' && (
+              <div className="space-y-5 my-auto">
+                <div>
+                  <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                    {isExpired
+                      ? 'नई 1-वर्षीय लाइसेंस की दर्ज करें (Renew 1 Year)'
+                      : '1-वर्षीय लाइसेंस की दर्ज करें (Activate 1 Year)'}
+                  </h2>
+                  <p className="text-xs text-neutral-500 mt-1">
+                    Creator द्वारा जनरेट की गई 20-अक्षरों की यूनिक वार्षिक लाइसेंस की नीचे दर्ज करें।
+                  </p>
+                </div>
+
+                <form onSubmit={handleAnnualActivateSubmit} className="space-y-4">
+                  <div className="space-y-1.5">
                     <label
                       htmlFor="license-key-input"
                       className="block text-xs font-medium text-neutral-700 dark:text-neutral-300"
                     >
-                      Product License Key
+                      Annual Product License Key (365 Days)
                     </label>
                     <input
                       id="license-key-input"
@@ -316,7 +586,7 @@ export const LicenseGateModal: React.FC = () => {
                       value={keyInput}
                       onChange={e => {
                         setKeyInput(formatLicenseKeyInput(e.target.value));
-                        if (feedback) setFeedback(null);
+                        if (annualFeedback) setAnnualFeedback(null);
                       }}
                       placeholder="VYPR-XXXX-XXXX-XXXX-XXXX-XXXX"
                       autoComplete="off"
@@ -325,15 +595,15 @@ export const LicenseGateModal: React.FC = () => {
                     />
                   </div>
 
-                  {feedback && (
+                  {annualFeedback && (
                     <div
                       className={`p-3.5 rounded-xl text-xs leading-relaxed border ${
-                        feedback.type === 'error'
+                        annualFeedback.type === 'error'
                           ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300'
                           : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300'
                       }`}
                     >
-                      {feedback.text}
+                      {annualFeedback.text}
                     </div>
                   )}
 
@@ -341,73 +611,45 @@ export const LicenseGateModal: React.FC = () => {
                     type="submit"
                     className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-semibold rounded-xl bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 transition-colors cursor-pointer"
                   >
-                    <span>
-                      {isExpired ? 'Renew Software License (1 Year)' : 'Activate 1-Year License'}
-                    </span>
+                    <span>Activate 1-Year Annual License</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
-
-                <div className="pt-4 border-t border-neutral-100 dark:border-neutral-800 grid grid-cols-3 gap-4 text-xs text-neutral-500">
-                  <div>
-                    <div className="font-semibold text-neutral-800 dark:text-neutral-200">
-                      365 Days
-                    </div>
-                    <div>Annual Validity</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-neutral-800 dark:text-neutral-200">
-                      Single-Use
-                    </div>
-                    <div>Anti-Replay Key</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-neutral-800 dark:text-neutral-200">
-                      100% Offline
-                    </div>
-                    <div>Signed Verification</div>
-                  </div>
-                </div>
               </div>
-            ) : (
-              /* Creator / Software Owner Key Generator Drawer inside Lock Screen */
-              <div className="space-y-5 my-auto">
-                <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3">
+            )}
+
+            {/* TAB 3: EXCLUSIVE CREATOR LOGIN (ALWAYS VALID / LIFETIME + KEYGEN) */}
+            {gateTab === 'creator' && (
+              <div className="space-y-4 my-auto">
+                <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-                      Creator Admin Console
+                    <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      <span>Creator Login (Always Valid)</span>
                     </h2>
-                    <p className="text-xs text-neutral-500">
-                      केवल सॉफ्टवेयर निर्माता (Creator) के लिए प्रतिबंधित लॉगिन
+                    <p className="text-xs text-neutral-500 mt-0.5">
+                      केवल सॉफ्टवेयर Creator के लिए — लॉगिन करने पर सॉफ्टवेयर हमेशा (Unlimited Time) मान्य रहेगा
                     </p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {creatorUnlocked && (
-                      <button
-                        type="button"
-                        onClick={resetCreatorSession}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>Logout</span>
-                      </button>
-                    )}
+                  {creatorKeygenOnlyUnlocked && (
                     <button
                       type="button"
-                      onClick={() => {
-                        resetCreatorSession();
-                        setShowCreatorDrawer(false);
-                      }}
-                      className="p-1.5 rounded-lg text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                      onClick={resetCreatorSession}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
                     >
-                      <X className="w-4 h-4" />
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Logout</span>
                     </button>
-                  </div>
+                  )}
                 </div>
 
-                {!creatorUnlocked ? (
-                  <form onSubmit={handleUnlockCreator} className="space-y-4" autoComplete="off">
-                    <div className="space-y-1.5">
+                {!creatorKeygenOnlyUnlocked ? (
+                  <form
+                    onSubmit={handleCreatorAlwaysValidSubmit}
+                    className="space-y-3.5"
+                    autoComplete="off"
+                  >
+                    <div className="space-y-1">
                       <label
                         htmlFor="gate-creator-id"
                         className="block text-xs font-medium text-neutral-700 dark:text-neutral-300"
@@ -420,7 +662,7 @@ export const LicenseGateModal: React.FC = () => {
                         value={creatorIdInput}
                         onChange={e => {
                           setCreatorIdInput(e.target.value);
-                          if (authError) setAuthError('');
+                          if (creatorError) setCreatorError('');
                         }}
                         placeholder="Enter Exclusive Creator ID"
                         autoComplete="off"
@@ -429,7 +671,7 @@ export const LicenseGateModal: React.FC = () => {
                       />
                     </div>
 
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <label
                         htmlFor="gate-creator-pass"
                         className="block text-xs font-medium text-neutral-700 dark:text-neutral-300"
@@ -443,7 +685,7 @@ export const LicenseGateModal: React.FC = () => {
                           value={creatorPasswordInput}
                           onChange={e => {
                             setCreatorPasswordInput(e.target.value);
-                            if (authError) setAuthError('');
+                            if (creatorError) setCreatorError('');
                           }}
                           placeholder="Enter Creator Password"
                           autoComplete="new-password"
@@ -464,18 +706,28 @@ export const LicenseGateModal: React.FC = () => {
                       </div>
                     </div>
 
-                    {authError && (
+                    {creatorError && (
                       <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300">
-                        {authError}
+                        {creatorError}
                       </div>
                     )}
 
-                    <button
-                      type="submit"
-                      className="w-full py-2.5 px-4 text-xs font-semibold rounded-xl bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 transition-colors cursor-pointer"
-                    >
-                      Sign In as Creator
-                    </button>
+                    <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+                      <button
+                        type="submit"
+                        className="flex-1 py-2.5 px-4 text-xs font-semibold rounded-xl bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 transition-colors cursor-pointer"
+                      >
+                        Sign In as Creator (Always Valid)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleOpenCreatorKeygenOnly}
+                        className="py-2.5 px-3.5 text-xs font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                      >
+                        Key Generator Only
+                      </button>
+                    </div>
                   </form>
                 ) : (
                   <div className="space-y-4">
@@ -504,8 +756,7 @@ export const LicenseGateModal: React.FC = () => {
                             <option value={365}>1 Year Annual (365 Days)</option>
                             <option value={730}>2 Years (730 Days)</option>
                             <option value={180}>6 Months (180 Days)</option>
-                            <option value={30}>30 Days Trial / Monthly</option>
-                            <option value={1}>1 Day (Quick Renewal Test)</option>
+                            <option value={30}>30 Days Monthly</option>
                           </select>
                         </div>
                       </div>
@@ -517,9 +768,7 @@ export const LicenseGateModal: React.FC = () => {
                           onChange={e => setBindToThisDevice(e.target.checked)}
                           className="rounded border-neutral-300 text-emerald-600"
                         />
-                        <span>
-                          Lock key to this System ID ({licenseState.installationId})
-                        </span>
+                        <span>Lock key to this System ID ({licenseState.installationId})</span>
                       </label>
 
                       <button
@@ -533,7 +782,7 @@ export const LicenseGateModal: React.FC = () => {
                     {latestGeneratedKey && (
                       <div className="p-4 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-emerald-300 dark:border-emerald-800 space-y-3">
                         <div className="text-xs text-neutral-500">
-                          Newly Generated Key ({genDays} Days):
+                          Generated Key ({genDays} Days):
                         </div>
                         <div className="font-mono tabular-nums text-sm sm:text-base font-bold text-emerald-700 dark:text-emerald-400 break-all">
                           {latestGeneratedKey}
@@ -542,7 +791,7 @@ export const LicenseGateModal: React.FC = () => {
                           <button
                             type="button"
                             onClick={handleCopyGeneratedKey}
-                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 inline-flex items-center gap-1.5"
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 inline-flex items-center gap-1.5 cursor-pointer"
                           >
                             {copiedKey ? (
                               <>
@@ -557,17 +806,17 @@ export const LicenseGateModal: React.FC = () => {
                             )}
                           </button>
 
-                           <button
+                          <button
                             type="button"
                             onClick={() => {
                               setKeyInput(latestGeneratedKey);
                               resetCreatorSession();
-                              setShowCreatorDrawer(false);
-                              setFeedback(null);
+                              setGateTab('annual');
+                              setAnnualFeedback(null);
                             }}
                             className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 cursor-pointer"
                           >
-                            Use Key in Activation Box
+                            Use Key in 1-Year Tab
                           </button>
                         </div>
                       </div>
@@ -577,30 +826,16 @@ export const LicenseGateModal: React.FC = () => {
               </div>
             )}
 
-            {/* Footer bar with discreet Creator Console access */}
-            <div className="pt-4 border-t border-neutral-100 dark:border-neutral-800 flex items-center justify-between text-xs text-neutral-500">
+            {/* Footer bar */}
+            <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex items-center justify-between text-xs text-neutral-500">
               <span className="flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5" />
-                <span>Annual Subscription Protection</span>
+                <span>Offline Signed Security</span>
               </span>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (showCreatorDrawer) {
-                    resetCreatorSession();
-                    setShowCreatorDrawer(false);
-                  } else {
-                    setShowCreatorDrawer(true);
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer"
-              >
+              <span className="flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5" />
-                <span>
-                  {showCreatorDrawer ? 'Back to License Input' : 'Creator Console'}
-                </span>
-              </button>
+                <span>Creator Access = Always Valid</span>
+              </span>
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import {
   CreatorConfig,
   GeneratedKeyRecord,
+  LicenseAccessMode,
   LicenseEvaluation,
   LicenseHistoryRecord,
   LicenseState,
@@ -16,10 +17,17 @@ const LICENSE_STORAGE_KEYS = {
 // Base32 Crockford-style unambiguous alphabet (excludes 0, 1, I, O) — exact 32 chars
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const EPOCH_START_MS = Date.UTC(2025, 0, 1, 0, 0, 0);
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
 const MASK64 = 0xffffffffffffffffn;
 const MASK68 = (1n << 68n) - 1n;
 const MASK32 = 0xffffffffn;
+
+// Public 2-Day Trial Login & Public License Key Constants
+export const PUBLIC_LOGIN_ID = 'PUBLIC-USER';
+export const PUBLIC_LOGIN_PASSWORD = 'Public@2Days';
+export const PUBLIC_2DAY_LICENSE_KEY = 'VYPR-PUBL-2DAY-FREE-DEMO-2026';
+export const PUBLIC_TRIAL_DURATION_DAYS = 2;
 
 // Master signing secret for VyaparPOS offline cryptographic verification
 const MASTER_SIGNING_SECRET = 'VYAPARPOS::ANNUAL-LICENSE-V1::9F84A2C7E1B5D306';
@@ -71,6 +79,13 @@ export function computeCreatorCredentialHash(domain: 'id' | 'pass', rawValue: st
     }
   }
   return [s0, s1, s2, s3].map(v => v.toString(16).padStart(16, '0')).join('');
+}
+
+export function verifyPublicLoginCredentials(loginId: string, password: string): boolean {
+  return (
+    loginId.trim().toUpperCase() === PUBLIC_LOGIN_ID &&
+    password.trim() === PUBLIC_LOGIN_PASSWORD
+  );
 }
 
 /**
@@ -335,11 +350,33 @@ function generateNewInstallationId(): string {
 }
 
 export function evaluateLicenseStatus(state: LicenseState): LicenseEvaluation {
-  if (!state.activeKey || !state.expiresAt || !state.activatedAt) {
+  // 1. Creator Lifetime Mode — ALWAYS VALID (Never expires, never locks)
+  if (state.accessMode === 'creator_lifetime') {
+    return {
+      status: 'creator_always_valid',
+      accessMode: 'creator_lifetime',
+      isLockedByLicense: false,
+      isCreatorLifetime: true,
+      isPublicTrial: false,
+      daysRemaining: 99999,
+      hoursRemaining: 999999,
+      totalDays: 365,
+      progressPercent: 100,
+      expiresAt: null,
+      activatedAt: state.activatedAt || state.lastVerifiedAt || new Date().toISOString(),
+    };
+  }
+
+  // 2. Unactivated state
+  if (!state.activeKey || !state.expiresAt || !state.activatedAt || state.accessMode === 'unactivated') {
     return {
       status: 'unactivated',
+      accessMode: 'unactivated',
       isLockedByLicense: true,
+      isCreatorLifetime: false,
+      isPublicTrial: false,
       daysRemaining: 0,
+      hoursRemaining: 0,
       totalDays: state.durationDays || 365,
       progressPercent: 0,
       expiresAt: null,
@@ -349,14 +386,22 @@ export function evaluateLicenseStatus(state: LicenseState): LicenseEvaluation {
 
   const now = Date.now();
   const lastVerifiedMs = state.lastVerifiedAt ? new Date(state.lastVerifiedAt).getTime() : now;
+  const isPublic =
+    state.accessMode === 'public_trial' || state.activeKey === PUBLIC_2DAY_LICENSE_KEY;
+  const resolvedMode: LicenseAccessMode = isPublic ? 'public_trial' : 'annual_license';
 
-  // Detect backward system clock tampering (> 24 hours rollback)
-  if (!Number.isNaN(lastVerifiedMs) && now < lastVerifiedMs - MS_PER_DAY) {
+  // Detect backward system clock tampering (> 2h for 2-day public trial, > 24h for annual)
+  const tamperThresholdMs = isPublic ? 2 * MS_PER_HOUR : MS_PER_DAY;
+  if (!Number.isNaN(lastVerifiedMs) && now < lastVerifiedMs - tamperThresholdMs) {
     return {
       status: 'clock_tampered',
+      accessMode: resolvedMode,
       isLockedByLicense: true,
+      isCreatorLifetime: false,
+      isPublicTrial: isPublic,
       daysRemaining: 0,
-      totalDays: state.durationDays || 365,
+      hoursRemaining: 0,
+      totalDays: state.durationDays || (isPublic ? PUBLIC_TRIAL_DURATION_DAYS : 365),
       progressPercent: 0,
       expiresAt: state.expiresAt,
       activatedAt: state.activatedAt,
@@ -364,13 +409,17 @@ export function evaluateLicenseStatus(state: LicenseState): LicenseEvaluation {
   }
 
   const expiresMs = new Date(state.expiresAt).getTime();
-  const totalDays = Math.max(1, state.durationDays || 365);
+  const totalDays = Math.max(1, state.durationDays || (isPublic ? PUBLIC_TRIAL_DURATION_DAYS : 365));
 
   if (now >= expiresMs) {
     return {
       status: 'expired',
+      accessMode: resolvedMode,
       isLockedByLicense: true,
+      isCreatorLifetime: false,
+      isPublicTrial: isPublic,
       daysRemaining: 0,
+      hoursRemaining: 0,
       totalDays,
       progressPercent: 0,
       expiresAt: state.expiresAt,
@@ -379,13 +428,37 @@ export function evaluateLicenseStatus(state: LicenseState): LicenseEvaluation {
   }
 
   const msLeft = expiresMs - now;
+  const hoursRemaining = Math.max(1, Math.ceil(msLeft / MS_PER_HOUR));
   const daysRemaining = Math.max(1, Math.ceil(msLeft / MS_PER_DAY));
+
+  if (isPublic) {
+    const totalMs = PUBLIC_TRIAL_DURATION_DAYS * MS_PER_DAY;
+    const progressPercent = Math.min(100, Math.max(0, Math.round((msLeft / totalMs) * 100)));
+    return {
+      status: 'public_trial_active',
+      accessMode: 'public_trial',
+      isLockedByLicense: false,
+      isCreatorLifetime: false,
+      isPublicTrial: true,
+      daysRemaining,
+      hoursRemaining,
+      totalDays: PUBLIC_TRIAL_DURATION_DAYS,
+      progressPercent,
+      expiresAt: state.expiresAt,
+      activatedAt: state.activatedAt,
+    };
+  }
+
   const progressPercent = Math.min(100, Math.max(0, Math.round((daysRemaining / totalDays) * 100)));
 
   return {
     status: daysRemaining <= 30 ? 'expiring_soon' : 'active',
+    accessMode: 'annual_license',
     isLockedByLicense: false,
+    isCreatorLifetime: false,
+    isPublicTrial: false,
     daysRemaining,
+    hoursRemaining,
     totalDays,
     progressPercent,
     expiresAt: state.expiresAt,
@@ -398,10 +471,19 @@ export const LicenseStorage = {
     try {
       const raw = localStorage.getItem(LICENSE_STORAGE_KEYS.STATE);
       if (raw) {
-        const parsed = JSON.parse(raw) as LicenseState;
+        const parsed = JSON.parse(raw) as Partial<LicenseState>;
         if (parsed && parsed.installationId) {
+          const inferredMode: LicenseAccessMode =
+            parsed.accessMode ||
+            (parsed.activeKey === PUBLIC_2DAY_LICENSE_KEY
+              ? 'public_trial'
+              : parsed.activeKey
+              ? 'annual_license'
+              : 'unactivated');
+
           return {
             installationId: parsed.installationId,
+            accessMode: inferredMode,
             activeKey: parsed.activeKey ?? null,
             activatedAt: parsed.activatedAt ?? null,
             expiresAt: parsed.expiresAt ?? null,
@@ -410,6 +492,9 @@ export const LicenseStorage = {
             usedKeys: Array.isArray(parsed.usedKeys) ? parsed.usedKeys : [],
             history: Array.isArray(parsed.history) ? parsed.history : [],
             lastVerifiedAt: parsed.lastVerifiedAt || new Date().toISOString(),
+            publicTrialUsed: Boolean(parsed.publicTrialUsed),
+            publicTrialStartedAt: parsed.publicTrialStartedAt ?? null,
+            publicTrialExpiresAt: parsed.publicTrialExpiresAt ?? null,
           };
         }
       }
@@ -419,6 +504,7 @@ export const LicenseStorage = {
 
     const initial: LicenseState = {
       installationId: generateNewInstallationId(),
+      accessMode: 'unactivated',
       activeKey: null,
       activatedAt: null,
       expiresAt: null,
@@ -427,6 +513,9 @@ export const LicenseStorage = {
       usedKeys: [],
       history: [],
       lastVerifiedAt: new Date().toISOString(),
+      publicTrialUsed: false,
+      publicTrialStartedAt: null,
+      publicTrialExpiresAt: null,
     };
     this.saveLicenseState(initial);
     return initial;
@@ -500,6 +589,120 @@ export const LicenseStorage = {
   },
 };
 
+export function activatePublicTrialState(
+  currentState: LicenseState,
+  rawKey: string,
+  activatedBy: string
+): { ok: boolean; updatedState?: LicenseState; message: string } {
+  const canonical = canonicalizeLicenseKey(rawKey);
+  if (canonical !== PUBLIC_2DAY_LICENSE_KEY) {
+    return {
+      ok: false,
+      message: `पब्लिक ट्रायल के लिए मान्य 2-दिवसीय पब्लिक लाइसेंस की (${PUBLIC_2DAY_LICENSE_KEY}) दर्ज करें।`,
+    };
+  }
+
+  const now = Date.now();
+  const lastVerifiedMs = currentState.lastVerifiedAt
+    ? new Date(currentState.lastVerifiedAt).getTime()
+    : now;
+
+  if (!Number.isNaN(lastVerifiedMs) && now < lastVerifiedMs - 2 * MS_PER_HOUR) {
+    return {
+      ok: false,
+      message: 'सिस्टम घड़ी पीछे की गई है! कृपया सही समय सेट करें।',
+    };
+  }
+
+  // If public trial was already started earlier on this device
+  if (currentState.publicTrialUsed && currentState.publicTrialExpiresAt) {
+    const prevExpiresMs = new Date(currentState.publicTrialExpiresAt).getTime();
+    if (now >= prevExpiresMs) {
+      return {
+        ok: false,
+        message:
+          '2-दिन (48 घंटे) का पब्लिक लाइसेंस समाप्त हो चुका है! पब्लिक लॉगिन केवल एक बार 2 दिन के लिए मान्य होता है। आगे उपयोग के लिए Creator से 1-साल की नई लाइसेंस की लें।',
+      };
+    }
+
+    const hoursLeft = Math.max(1, Math.ceil((prevExpiresMs - now) / MS_PER_HOUR));
+    const resumedState: LicenseState = {
+      ...currentState,
+      accessMode: 'public_trial',
+      activeKey: PUBLIC_2DAY_LICENSE_KEY,
+      activatedAt: currentState.publicTrialStartedAt || new Date(now).toISOString(),
+      expiresAt: currentState.publicTrialExpiresAt,
+      durationDays: PUBLIC_TRIAL_DURATION_DAYS,
+      planLabel: '2-Day Public License',
+      lastVerifiedAt: new Date(now).toISOString(),
+    };
+
+    return {
+      ok: true,
+      updatedState: resumedState,
+      message: `पब्लिक लॉगिन सक्रिय! आपके 2-दिवसीय पब्लिक लाइसेंस में ${hoursLeft} घंटे शेष हैं।`,
+    };
+  }
+
+  const startedAtIso = new Date(now).toISOString();
+  const expiresAtIso = new Date(now + PUBLIC_TRIAL_DURATION_DAYS * MS_PER_DAY).toISOString();
+
+  const historyEntry: LicenseHistoryRecord = {
+    id: `lic-pub-${now}`,
+    licenseKey: PUBLIC_2DAY_LICENSE_KEY,
+    activatedAt: startedAtIso,
+    expiresAt: expiresAtIso,
+    durationDays: PUBLIC_TRIAL_DURATION_DAYS,
+    planLabel: '2-Day Public License',
+    activatedBy,
+    isDeviceBound: false,
+  };
+
+  const updatedState: LicenseState = {
+    ...currentState,
+    accessMode: 'public_trial',
+    activeKey: PUBLIC_2DAY_LICENSE_KEY,
+    activatedAt: startedAtIso,
+    expiresAt: expiresAtIso,
+    durationDays: PUBLIC_TRIAL_DURATION_DAYS,
+    planLabel: '2-Day Public License',
+    usedKeys: Array.from(new Set([...currentState.usedKeys, PUBLIC_2DAY_LICENSE_KEY])),
+    history: [historyEntry, ...currentState.history],
+    lastVerifiedAt: startedAtIso,
+    publicTrialUsed: true,
+    publicTrialStartedAt: startedAtIso,
+    publicTrialExpiresAt: expiresAtIso,
+  };
+
+  return {
+    ok: true,
+    updatedState,
+    message: '2-दिवसीय पब्लिक लाइसेंस (48 Hours) सफलतापूर्वक सक्रिय हो गया!',
+  };
+}
+
+export function activateCreatorLifetimeState(currentState: LicenseState): LicenseState {
+  const nowIso = new Date().toISOString();
+  return {
+    ...currentState,
+    accessMode: 'creator_lifetime',
+    lastVerifiedAt: nowIso,
+  };
+}
+
+export function exitCreatorLifetimeState(currentState: LicenseState): LicenseState {
+  let fallbackMode: LicenseAccessMode = 'unactivated';
+  if (currentState.activeKey && currentState.activeKey !== PUBLIC_2DAY_LICENSE_KEY) {
+    fallbackMode = 'annual_license';
+  } else if (currentState.activeKey === PUBLIC_2DAY_LICENSE_KEY) {
+    fallbackMode = 'public_trial';
+  }
+  return {
+    ...currentState,
+    accessMode: fallbackMode,
+  };
+}
+
 export function applyLicenseActivation(
   currentState: LicenseState,
   verified: Required<
@@ -508,9 +711,12 @@ export function applyLicenseActivation(
   activatedBy: string
 ): LicenseState {
   const now = Date.now();
-  // If renewing early while current license is still active, extend from existing expiry date;
-  // if expired or first activation, start 1-year validity from right now.
-  const currentExpiryMs = currentState.expiresAt ? new Date(currentState.expiresAt).getTime() : 0;
+  // Stack remaining days ONLY if previous active license was a paid annual/custom license (not 2-day public trial)
+  const wasAnnualLicense =
+    currentState.accessMode === 'annual_license' &&
+    currentState.activeKey !== PUBLIC_2DAY_LICENSE_KEY;
+  const currentExpiryMs =
+    wasAnnualLicense && currentState.expiresAt ? new Date(currentState.expiresAt).getTime() : 0;
   const baseStartMs = currentExpiryMs > now ? currentExpiryMs : now;
   const newExpiresMs = baseStartMs + verified.durationDays * MS_PER_DAY;
 
@@ -534,6 +740,7 @@ export function applyLicenseActivation(
 
   return {
     ...currentState,
+    accessMode: 'annual_license',
     activeKey: verified.canonicalKey,
     activatedAt: activatedAtIso,
     expiresAt: expiresAtIso,

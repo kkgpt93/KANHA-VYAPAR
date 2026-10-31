@@ -1,13 +1,202 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Default Signature Palette: Royal Peacock Sapphire & Saffron Gold */
+@theme {
+  /* Cool Sapphire-Tinted Sophisticated Neutrals (<5% saturation) */
+  --color-neutral-50: #f2f7fb;
+  --color-neutral-100: #e6eff7;
+  --color-neutral-200: #d1e0ee;
+  --color-neutral-300: #afc6dc;
+  --color-neutral-400: #7c9ab8;
+  --color-neutral-500: #557290;
+  --color-neutral-600: #3d5671;
+  --color-neutral-700: #293e56;
+  --color-neutral-800: #18293e;
+  --color-neutral-900: #0e1c2f;
+  --color-neutral-950: #07111e;
+
+  /* Primary Signature Accent Scale: Royal Peacock Ocean-Teal */
+  --color-emerald-50: #ecfeff;
+  --color-emerald-100: #cffafe;
+  --color-emerald-200: #a5f3fc;
+  --color-emerald-300: #67e8f9;
+  --color-emerald-400: #22d3ee;
+  --color-emerald-500: #06b6d4;
+  --color-emerald-600: #0e7490;
+  --color-emerald-700: #155e75;
+  --color-emerald-800: #164e63;
+  --color-emerald-900: #113c4d;
+  --color-emerald-950: #082635;
+}
+
+:root {
+  --cmd-bg: #0a2540;
+  --cmd-bg-end: #10375c;
+  --cmd-border: #1b4975;
+  --cmd-active-bg: #f59e0b;
+  --cmd-active-text: #07192b;
+  --cmd-gold: #fbbf24;
+}
+
+/* Theme 2: Maharaja Indigo & Saffron */
+:root[data-color-theme="maharaja"] {
+  --color-neutral-50: #f4f4fc;
+  --color-neutral-100: #eaeaf7;
+  --color-neutral-200: #d6d7ed;
+  --color-neutral-300: #b7b9dc;
+  --color-neutral-400: #878ab8;
+  --color-neutral-500: #5f6291;
+  --color-neutral-600: #464973;
+  --color-neutral-700: #313358;
+  --color-neutral-800: #1f203f;
+  --color-neutral-900: #13142c;
+  --color-neutral-950: #0a0b1a;
+
+  --color-emerald-50: #eef2ff;
+  --color-emerald-100: #e0e7ff;
+  --color-emerald-200: #c7d2fe;
+  --color-emerald-300: #a5b4fc;
+  --color-emerald-400: #818cf8;
+  --color-emerald-500: #6366f1;
+  --color-emerald-600: #4338ca;
+  --color-emerald-700: #3730a3;
+  --color-emerald-800: #312e81;
+  --color-emerald-900: #262463;
+  --color-emerald-950: #17153b;
+
+  --cmd-bg: #171342;
+  --cmd-bg-end: #261f69;
+  --cmd-border: #382f8f;
+  --cmd-active-bg: #fbbf24;
+  --cmd-active-text: #141036;
+  --cmd-gold: #fcd34d;
+}
+
+/* Theme 3: Shahi Ruby & Warm Ivory */
+:root[data-color-theme="ruby"] {
+  --color-neutral-50: #fcf6f6;
+  --color-neutral-100: #f7ecec;
+  --color-neutral-200: #ebd8d9;
+  --color-neutral-300: #d9b9bc;
+  --color-neutral-400: #b2898e;
+  --color-neutral-500: #876066;
+  --color-neutral-600: #69474d;
+  --color-neutral-700: #4f3338;
+  --color-neutral-800: #352025;
+  --color-neutral-900: #221317;
+  --color-neutral-950: #13090c;
+
+  --color-emerald-50: #fff1f2;
+  --color-emerald-100: #ffe4e6;
+  --color-emerald-200: #fecdd3;
+  --color-emerald-300: #fda4af;
+  --color-emerald-400: #fb7185;
+  --color-emerald-500: #f43f5e;
+  --color-emerald-600: #be123c;
+  --color-emerald-700: #9f1239;
+  --color-emerald-800: #881337;
+  --color-emerald-900: #68102c;
+  --color-emerald-950: #3f0819;
+
+  --cmd-bg: #3b0b1d;
+  --cmd-bg-end: #5c132f;
+  --cmd-border: #7a1c40;
+  --cmd-active-bg: #fcd34d;
+  --cmd-active-text: #2e0716;
+  --cmd-gold: #fde68a;
+}
+
+/* Theme 4: Kesariya Copper & Sandstone */
+:root[data-color-theme="kesariya"] {
+  --color-neutral-50: #fbf7f3;
+  --color-neutral-100: #f5ede4;
+  --color-neutral-200: #e8dacb;
+  --color-neutral-300: #d4bea8;
+  --color-neutral-400: #ad9177;
+  --color-neutral-500: #826850;
+  --color-neutral-600: #644e3b;
+  --color-neutral-700: #4b392a;
+  --color-neutral-800: #33251b;
+  --color-neutral-900: #211710;
+  --color-neutral-950: #130c08;
+
+  --color-emerald-50: #fff7ed;
+  --color-emerald-100: #ffedd5;
+  --color-emerald-200: #fed7aa;
+  --color-emerald-300: #fdba74;
+  --color-emerald-400: #fb923c;
+  --color-emerald-500: #f97316;
+  --color-emerald-600: #c2410c;
+  --color-emerald-700: #9a3412;
+  --color-emerald-800: #7c2d12;
+  --color-emerald-900: #5e220e;
+  --color-emerald-950: #3b1306;
+
+  --cmd-bg: #2e1509;
+  --cmd-bg-end: #4a2310;
+  --cmd-border: #693318;
+  --cmd-active-bg: #fbbf24;
+  --cmd-active-text: #261005;
+  --cmd-gold: #fcd34d;
+}
+
+/* Theme 5: Malabar Forest Emerald & Brass */
+:root[data-color-theme="emerald"] {
+  --color-neutral-50: #f2f9f6;
+  --color-neutral-100: #e5f2ec;
+  --color-neutral-200: #cee3da;
+  --color-neutral-300: #adcbbd;
+  --color-neutral-400: #7ea393;
+  --color-neutral-500: #577a6b;
+  --color-neutral-600: #3f5d50;
+  --color-neutral-700: #2b4339;
+  --color-neutral-800: #1b2c25;
+  --color-neutral-900: #101d18;
+  --color-neutral-950: #07110d;
+
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #047857;
+  --color-emerald-700: #065f46;
+  --color-emerald-800: #064e3b;
+  --color-emerald-900: #053b2d;
+  --color-emerald-950: #02261d;
+
+  --cmd-bg: #07291e;
+  --cmd-bg-end: #0e4231;
+  --cmd-border: #175c46;
+  --cmd-active-bg: #fbbf24;
+  --cmd-active-text: #062118;
+  --cmd-gold: #fcd34d;
+}
 
 @layer base {
   body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 
   code, pre, .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
+}
+
+.brand-command-surface {
+  background: linear-gradient(135deg, var(--cmd-bg) 0%, var(--cmd-bg-end) 100%);
+  border-color: var(--cmd-border);
+}
+
+.brand-active-tab {
+  background-color: var(--cmd-active-bg);
+  color: var(--cmd-active-text);
+}
+
+.brand-gold-text {
+  color: var(--cmd-gold);
 }
 
 /* Print Styles for Receipts & Invoices */
@@ -26,12 +215,12 @@
   body * {
     visibility: hidden;
   }
-  
+
   #printable-receipt, #printable-receipt *,
   #printable-invoice-report, #printable-invoice-report * {
     visibility: visible;
   }
-  
+
   #printable-receipt,
   #printable-invoice-report {
     position: absolute;

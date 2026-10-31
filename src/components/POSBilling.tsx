@@ -33,6 +33,7 @@ import { Product, PaymentMethod, Invoice, Customer } from '../types';
 import { formatCurrency } from '../utils/formatters';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { AddInvoiceItemModal } from './AddInvoiceItemModal';
 
 export const POSBilling: React.FC = () => {
   const {
@@ -60,8 +61,11 @@ export const POSBilling: React.FC = () => {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null);
 
+  // Quick Add Item to Bill / Invoice modal state
+  const [isQuickAddItemOpen, setIsQuickAddItemOpen] = useState(false);
+  const [quickAddInitialName, setQuickAddInitialName] = useState('');
+
   // Draft print preview state
-  const [draftInvoice, setDraftInvoice] = useState<Invoice | null>(null);
   const [isDraftPreviewOpen, setIsDraftPreviewOpen] = useState(false);
 
   // Checkout form details
@@ -252,19 +256,10 @@ export const POSBilling: React.FC = () => {
     }
   };
 
-  // Open Print Preview (either live draft of current cart or last invoice)
-  const handleOpenPrintPreview = () => {
-    if (cart.length === 0) {
-      if (invoices.length > 0) {
-        setActiveInvoice(invoices[0]);
-      } else {
-        setErrorMsg('Add items to cart or select an invoice to preview');
-        setTimeout(() => setErrorMsg(null), 3000);
-      }
-      return;
-    }
+  // Live Draft Invoice computed reactively from current cart & customer inputs
+  const liveDraftInvoice = useMemo<Invoice | null>(() => {
+    if (!isDraftPreviewOpen) return null;
 
-    // Build realistic draft invoice matching current POS inputs
     const draftItems = cart.map(ci => {
       const gross = ci.quantity * ci.unitPrice;
       const itemDiscount = (gross * (ci.discountPercent || 0)) / 100;
@@ -293,8 +288,8 @@ export const POSBilling: React.FC = () => {
     const draftTaxTotal = draftItems.reduce((sum, it) => sum + it.taxAmount, 0);
     const draftGrandTotal = Math.max(0, Math.round(draftSubtotal + draftTaxTotal - draftDiscountTotal));
 
-    const draftInv: Invoice = {
-      id: `draft-preview-${Date.now()}`,
+    return {
+      id: 'draft-preview',
       invoiceNumber: 'DRAFT-PREVIEW',
       createdAt: new Date().toISOString(),
       cashierId: activeUser.id,
@@ -318,8 +313,27 @@ export const POSBilling: React.FC = () => {
       status: 'paid',
       notes: customerNotes.trim(),
     };
+  }, [
+    isDraftPreviewOpen,
+    cart,
+    billDiscountPercent,
+    activeUser,
+    selectedCustomer,
+    customerName,
+    customerPhone,
+    customerAddress,
+    customerGstin,
+    paymentMethod,
+    cashTendered,
+    customerNotes,
+  ]);
 
-    setDraftInvoice(draftInv);
+  // Open Print Preview (either live draft of current cart or last invoice)
+  const handleOpenPrintPreview = () => {
+    if (cart.length === 0 && invoices.length > 0) {
+      setActiveInvoice(invoices[0]);
+      return;
+    }
     setIsDraftPreviewOpen(true);
   };
 
@@ -397,9 +411,9 @@ export const POSBilling: React.FC = () => {
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+              className={`px-3 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 selectedCategory === cat
-                  ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 shadow-xs'
+                  ? 'bg-emerald-600 text-white shadow-xs'
                   : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800'
               }`}
             >
@@ -435,11 +449,23 @@ export const POSBilling: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <button
                   type="button"
-                  onClick={() => triggerQuickEntry('add-product')}
+                  onClick={() => {
+                    setQuickAddInitialName('');
+                    setIsQuickAddItemOpen(true);
+                  }}
                   className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Add Item in Invoice / Bill</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => triggerQuickEntry('add-product')}
+                  className="px-4 py-2.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
                   <PackagePlus className="w-4 h-4" />
-                  <span>+ Add New Product</span>
+                  <span>+ Add Inventory Product</span>
                 </button>
 
                 <button
@@ -449,15 +475,6 @@ export const POSBilling: React.FC = () => {
                 >
                   <Building2 className="w-4 h-4" />
                   <span>Set Store Name & UPI</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => triggerQuickEntry('add-customer')}
-                  className="px-4 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-medium inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>+ Add New Customer</span>
                 </button>
 
                 <button
@@ -477,8 +494,19 @@ export const POSBilling: React.FC = () => {
                 No items matching "{searchQuery}"
               </p>
               <p className="text-xs text-neutral-400 mt-0.5">
-                Check spelling or add item via Inventory menu
+                Add it directly to the current invoice or save to Inventory
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickAddInitialName(searchQuery.trim());
+                  setIsQuickAddItemOpen(true);
+                }}
+                className="mt-3 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add "{searchQuery.trim()}" to Bill</span>
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
@@ -561,37 +589,49 @@ export const POSBilling: React.FC = () => {
 
       {/* Right Area: Checkout & Cart Terminal (400px on desktop) */}
       <div className="w-full lg:w-[420px] flex flex-col bg-white dark:bg-neutral-900 border-t lg:border-t-0 border-neutral-200 dark:border-neutral-800 h-[50vh] lg:h-full">
-        {/* Cart Header */}
-        <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-              Current Bill
+        {/* Cart / Invoice Header */}
+        <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm font-bold text-neutral-900 dark:text-neutral-100 truncate">
+              Current Invoice
             </span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 font-mono">
-              {cart.reduce((s, c) => s + c.quantity, 0)} items
+            <span className="text-xs text-neutral-500 dark:text-neutral-400 font-mono shrink-0">
+              · {cart.reduce((s, c) => s + c.quantity, 0)} items
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setQuickAddInitialName('');
+                setIsQuickAddItemOpen(true);
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title="Add Item to Invoice / Bill (इनवॉइस में आइटम जोड़ें)"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Item</span>
+            </button>
+
             <button
               type="button"
               onClick={handleOpenPrintPreview}
-              disabled={cart.length === 0 && invoices.length === 0}
-              className="text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 font-medium transition-colors border border-neutral-200 dark:border-neutral-700 px-2 py-1 rounded-md bg-neutral-50 dark:bg-neutral-800/60"
+              className="text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 flex items-center gap-1 font-medium transition-colors border border-neutral-200 dark:border-neutral-700 px-2 py-1 rounded-md bg-neutral-50 dark:bg-neutral-800/60 whitespace-nowrap shrink-0 cursor-pointer"
               title="Print Preview (F10)"
             >
               <Printer className="w-3.5 h-3.5 text-neutral-500" />
               <span className="hidden sm:inline">Preview</span>
-              <span className="text-[10px] text-neutral-400 font-mono">(F10)</span>
             </button>
 
             {cart.length > 0 && (
               <button
+                type="button"
                 onClick={clearCart}
-                className="text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 flex items-center gap-1 font-medium transition-colors"
+                className="text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 flex items-center gap-1 font-medium transition-colors px-1 cursor-pointer"
+                title="Clear Bill"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Clear</span>
               </button>
             )}
           </div>
@@ -602,10 +642,23 @@ export const POSBilling: React.FC = () => {
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 text-neutral-400">
               <ShoppingBag className="w-10 h-10 mb-2 opacity-30 stroke-1" />
-              <p className="text-xs font-medium text-neutral-500">Cart is currently empty</p>
-              <p className="text-[11px] text-neutral-400 mt-1 max-w-[200px]">
-                Scan a barcode or click items from catalog to add to bill
+              <p className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                Invoice / Bill is currently empty
               </p>
+              <p className="text-[11px] text-neutral-400 mt-1 max-w-[220px]">
+                Click items from catalog, scan barcode, or add any item directly below
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickAddInitialName('');
+                  setIsQuickAddItemOpen(true);
+                }}
+                className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Item (आइटम जोड़ें)</span>
+              </button>
             </div>
           ) : (
             cart.map(item => {
@@ -878,25 +931,25 @@ export const POSBilling: React.FC = () => {
 
         {/* Bill Summary & Payment Section */}
         <div className="p-3 sm:p-4 border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-3">
-          {/* Subtotals & Grand Total */}
-          <div className="space-y-1 text-xs">
-            <div className="flex justify-between text-neutral-600 dark:text-neutral-400">
+          {/* Signature Jewel Subtotals & Grand Total Card */}
+          <div className="p-3 rounded-xl brand-command-surface text-white border space-y-1.5 text-xs">
+            <div className="flex justify-between text-white/80">
               <span>Subtotal:</span>
               <span className="font-mono tabular-nums">₹{cartSubtotal.toFixed(2)}</span>
             </div>
             {discountAmount > 0 && (
-              <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-medium">
+              <div className="flex justify-between text-amber-300 font-medium">
                 <span>Discount ({billDiscountPercent}%):</span>
                 <span className="font-mono tabular-nums">-₹{discountAmount.toFixed(2)}</span>
               </div>
             )}
-            <div className="flex justify-between text-neutral-600 dark:text-neutral-400">
+            <div className="flex justify-between text-white/80">
               <span>GST / Tax:</span>
               <span className="font-mono tabular-nums">₹{cartTaxTotal.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-base font-bold text-neutral-900 dark:text-neutral-100 pt-1 border-t border-neutral-200 dark:border-neutral-800">
+            <div className="flex justify-between items-baseline text-base font-bold text-white pt-1.5 border-t border-white/15">
               <span>Total Payable:</span>
-              <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+              <span className="font-mono tabular-nums text-lg brand-gold-text">
                 {formatCurrency(grandTotal, settings.currencySymbol)}
               </span>
             </div>
@@ -1020,6 +1073,17 @@ export const POSBilling: React.FC = () => {
         onBarcodeDetected={handleBarcodeScanned}
       />
 
+      {/* Quick Add Item to Current Bill / Invoice Modal */}
+      <AddInvoiceItemModal
+        isOpen={isQuickAddItemOpen}
+        mode="cart"
+        initialItemName={quickAddInitialName}
+        onClose={() => {
+          setIsQuickAddItemOpen(false);
+          setQuickAddInitialName('');
+        }}
+      />
+
       {/* Generated / Completed Invoice Print Preview Modal */}
       <PrintPreviewModal
         invoice={activeInvoice}
@@ -1029,13 +1093,12 @@ export const POSBilling: React.FC = () => {
 
       {/* Draft Bill Print Preview Modal (Live Cart Preview Before Sale) */}
       <PrintPreviewModal
-        invoice={draftInvoice}
+        invoice={liveDraftInvoice}
         isOpen={isDraftPreviewOpen}
         isDraft={true}
-        onCompleteSale={handleCheckoutSubmit}
+        onCompleteSale={cart.length > 0 ? handleCheckoutSubmit : undefined}
         onClose={() => {
           setIsDraftPreviewOpen(false);
-          setDraftInvoice(null);
         }}
       />
     </div>

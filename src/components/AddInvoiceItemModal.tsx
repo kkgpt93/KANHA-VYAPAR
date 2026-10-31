@@ -1,0 +1,874 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  Plus,
+  Minus,
+  Search,
+  X,
+  Check,
+  PackagePlus,
+  ShoppingBag,
+  Trash2,
+  Receipt,
+  Banknote,
+  QrCode,
+  CreditCard,
+  AlertCircle,
+} from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import { Invoice, InvoiceItemInput, PaymentMethod, Product } from '../types';
+import { formatCurrency } from '../utils/formatters';
+
+export interface AddInvoiceItemModalProps {
+  isOpen: boolean;
+  mode: 'cart' | 'existing-invoice' | 'new-invoice';
+  targetInvoice?: Invoice | null;
+  initialItemName?: string;
+  onClose: () => void;
+  onInvoiceCreated?: (invoice: Invoice) => void;
+}
+
+const UNITS: Product['unit'][] = ['pcs', 'kg', 'g', 'ltr', 'ml', 'pkt', 'box'];
+const GST_RATES = [0, 5, 12, 18, 28];
+
+export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
+  isOpen,
+  mode,
+  targetInvoice,
+  initialItemName = '',
+  onClose,
+  onInvoiceCreated,
+}) => {
+  const {
+    products,
+    invoices,
+    settings,
+    addCustomOrCatalogItemToCart,
+    addItemToInvoice,
+    createDirectInvoice,
+  } = useApp();
+
+  // Live reference to target invoice so updated totals reflect immediately
+  const liveTargetInvoice = useMemo(() => {
+    if (!targetInvoice) return null;
+    return invoices.find(i => i.id === targetInvoice.id) || targetInvoice;
+  }, [invoices, targetInvoice]);
+
+  const [entryTab, setEntryTab] = useState<'custom' | 'catalog'>(() =>
+    initialItemName || products.length === 0 ? 'custom' : 'catalog'
+  );
+
+  // Custom item fields
+  const [itemName, setItemName] = useState(initialItemName);
+  const [unitPrice, setUnitPrice] = useState<string>('');
+  const [quantity, setQuantity] = useState<number>(1);
+  const [unit, setUnit] = useState<Product['unit']>('pcs');
+  const [taxRate, setTaxRate] = useState<number>(settings.defaultTaxRate || 0);
+  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [saveToInventory, setSaveToInventory] = useState<boolean>(false);
+  const [category, setCategory] = useState<string>('General');
+  const [initialStock, setInitialStock] = useState<number>(50);
+
+  // Catalog search & per-product quick qty
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogQuantities, setCatalogQuantities] = useState<Record<string, number>>({});
+
+  // New-invoice mode draft items & customer fields
+  const [draftItems, setDraftItems] = useState<InvoiceItemInput[]>([]);
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+
+  // Feedback & validation messages
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setItemName(initialItemName || '');
+      setEntryTab(initialItemName || products.length === 0 ? 'custom' : 'catalog');
+      setErrorMsg(null);
+      setFeedbackMsg(null);
+    }
+  }, [isOpen, initialItemName, products.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
+  const filteredCatalog = useMemo(() => {
+    const q = catalogSearch.toLowerCase().trim();
+    if (!q) return products;
+    return products.filter(
+      p =>
+        p.name.toLowerCase().includes(q) ||
+        (p.nameHindi && p.nameHindi.toLowerCase().includes(q)) ||
+        p.barcode.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q)
+    );
+  }, [products, catalogSearch]);
+
+  // Live preview of the custom item form
+  const customPreview = useMemo(() => {
+    const rate = Math.max(0, Number(unitPrice) || 0);
+    const qty = Math.max(1, Number(quantity) || 1);
+    const gross = rate * qty;
+    const discAmt = (gross * Math.max(0, Math.min(100, discountPercent))) / 100;
+    const net = Math.max(0, gross - discAmt);
+    const taxAmt = Math.round((net * taxRate) / 100);
+    const total = net + taxAmt;
+    return { gross, discAmt, net, taxAmt, total };
+  }, [unitPrice, quantity, discountPercent, taxRate]);
+
+  // Draft totals for mode === 'new-invoice'
+  const draftTotals = useMemo(() => {
+    let subtotal = 0;
+    let discountTotal = 0;
+    let taxTotal = 0;
+    draftItems.forEach(it => {
+      const gross = it.quantity * it.unitPrice;
+      const disc = (gross * (it.discountPercent || 0)) / 100;
+      const net = Math.max(0, gross - disc);
+      const tax = Math.round((net * it.taxRate) / 100);
+      subtotal += gross;
+      discountTotal += disc;
+      taxTotal += tax;
+    });
+    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+    return { subtotal, discountTotal, taxTotal, grandTotal };
+  }, [draftItems]);
+
+  if (!isOpen) return null;
+
+  const flashFeedback = (msg: string) => {
+    setFeedbackMsg(msg);
+    setErrorMsg(null);
+    setTimeout(() => {
+      setFeedbackMsg(prev => (prev === msg ? null : prev));
+    }, 2600);
+  };
+
+  const resetCustomForm = () => {
+    setItemName('');
+    setUnitPrice('');
+    setQuantity(1);
+    setDiscountPercent(0);
+  };
+
+  const buildCustomInput = (): InvoiceItemInput | null => {
+    const trimmed = itemName.trim();
+    const numericPrice = Number(unitPrice);
+    if (!trimmed) {
+      setErrorMsg('कृपया आइटम का नाम लिखें (Please enter item name).');
+      return null;
+    }
+    if (unitPrice === '' || isNaN(numericPrice) || numericPrice < 0) {
+      setErrorMsg('कृपया सही कीमत दर्ज करें (Please enter a valid item rate).');
+      return null;
+    }
+    return {
+      name: trimmed,
+      category: category.trim() || 'General',
+      unit,
+      quantity: Math.max(1, Number(quantity) || 1),
+      unitPrice: numericPrice,
+      taxRate,
+      discountPercent,
+      saveToInventory,
+      initialStock: saveToInventory ? Math.max(1, Number(initialStock) || 50) : undefined,
+    };
+  };
+
+  const dispatchItemAddition = (input: InvoiceItemInput, closeAfter: boolean) => {
+    if (mode === 'cart') {
+      addCustomOrCatalogItemToCart(input);
+      if (closeAfter) {
+        onClose();
+      } else {
+        flashFeedback(`"${input.name}" (×${input.quantity}) बिल में जोड़ा गया!`);
+        resetCustomForm();
+      }
+      return;
+    }
+
+    if (mode === 'existing-invoice') {
+      if (!liveTargetInvoice) {
+        setErrorMsg('No active invoice selected.');
+        return;
+      }
+      const updated = addItemToInvoice(liveTargetInvoice.id, input);
+      if (!updated) {
+        setErrorMsg('Refunded invoice cannot be modified.');
+        return;
+      }
+      if (closeAfter) {
+        onClose();
+      } else {
+        flashFeedback(
+          `"${input.name}" (×${input.quantity}) ${updated.invoiceNumber} में जोड़ा गया!`
+        );
+        resetCustomForm();
+      }
+      return;
+    }
+
+    // mode === 'new-invoice'
+    setDraftItems(prev => {
+      const existingIdx = prev.findIndex(
+        it =>
+          input.productId &&
+          it.productId === input.productId &&
+          it.unitPrice === input.unitPrice &&
+          it.taxRate === input.taxRate
+      );
+      if (existingIdx >= 0) {
+        return prev.map((it, idx) =>
+          idx === existingIdx ? { ...it, quantity: it.quantity + input.quantity } : it
+        );
+      }
+      return [...prev, input];
+    });
+    flashFeedback(`"${input.name}" (×${input.quantity}) इनवॉइस लिस्ट में जोड़ा गया!`);
+    resetCustomForm();
+  };
+
+  const handleAddCustomSubmit = (closeAfter: boolean) => {
+    const built = buildCustomInput();
+    if (!built) return;
+    dispatchItemAddition(built, closeAfter);
+  };
+
+  const handleAddCatalogProduct = (product: Product, closeAfter = false) => {
+    const qty = Math.max(1, catalogQuantities[product.id] || 1);
+    const input: InvoiceItemInput = {
+      productId: product.id,
+      name: product.name,
+      barcode: product.barcode,
+      unit: product.unit,
+      quantity: qty,
+      unitPrice: product.sellingPrice,
+      taxRate: product.taxRate,
+      discountPercent: 0,
+    };
+    dispatchItemAddition(input, closeAfter);
+    setCatalogQuantities(prev => ({ ...prev, [product.id]: 1 }));
+  };
+
+  const handleFinalizeNewInvoice = () => {
+    let itemsToCreate = [...draftItems];
+
+    // If user typed a custom item in the form and directly clicked "Generate Invoice", include it automatically
+    if (itemName.trim() && unitPrice !== '' && !isNaN(Number(unitPrice))) {
+      const pendingItem = buildCustomInput();
+      if (pendingItem) {
+        itemsToCreate = [...itemsToCreate, pendingItem];
+      }
+    }
+
+    if (itemsToCreate.length === 0) {
+      setErrorMsg('इनवॉइस बनाने के लिए कम से कम 1 आइटम जोड़ें (Add at least 1 item to create invoice).');
+      return;
+    }
+
+    try {
+      const created = createDirectInvoice({
+        items: itemsToCreate,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        paymentMethod,
+      });
+      onClose();
+      if (onInvoiceCreated) {
+        onInvoiceCreated(created);
+      }
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to create invoice');
+    }
+  };
+
+  const modalTitle =
+    mode === 'existing-invoice' && liveTargetInvoice
+      ? `Add Item to Invoice · ${liveTargetInvoice.invoiceNumber}`
+      : mode === 'new-invoice'
+      ? 'Create Invoice & Add Items (नया इनवॉइस / आइटम जोड़ें)'
+      : 'Add Item to Current Bill (बिल में आइटम जोड़ें)';
+
+  const modalSubtitle =
+    mode === 'existing-invoice' && liveTargetInvoice
+      ? `Customer: ${liveTargetInvoice.customerName || 'Walk-in'} · Items: ${liveTargetInvoice.items.reduce(
+          (s, i) => s + i.quantity,
+          0
+        )} · Current Total: ${formatCurrency(liveTargetInvoice.grandTotal, settings.currencySymbol)}`
+      : mode === 'new-invoice'
+      ? 'इन्वेंटरी से आइटम चुनें या नया कस्टम आइटम लिखकर तुरंत GST बिल बनाएं'
+      : 'इन्वेंटरी से चुनें या बिना कैटलॉग के सीधा नया आइटम बिल में जोड़ें';
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto no-print">
+      <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-2xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto flex flex-col max-h-[92vh] overflow-hidden">
+        {/* Signature Command Header */}
+        <div className="px-4 sm:px-5 py-3.5 brand-command-surface text-white border-b flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm sm:text-base font-bold tracking-tight flex items-center gap-2 truncate">
+              <PackagePlus className="w-4 h-4 brand-gold-text shrink-0" />
+              <span className="truncate">{modalTitle}</span>
+            </h3>
+            <p className="text-[11px] text-white/75 mt-0.5 truncate">{modalSubtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+            title="Close (Esc)"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Interactive Mode Switch Tabs */}
+        <div className="px-4 sm:px-5 pt-3 pb-2.5 bg-neutral-50 dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="inline-flex p-1 rounded-lg bg-neutral-200/80 dark:bg-neutral-800 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => {
+                setEntryTab('custom');
+                setErrorMsg(null);
+              }}
+              className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                entryTab === 'custom'
+                  ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-2xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+              }`}
+            >
+              + Custom / New Item (नया आइटम)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEntryTab('catalog');
+                setErrorMsg(null);
+              }}
+              className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                entryTab === 'catalog'
+                  ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-2xs'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+              }`}
+            >
+              From Inventory ({products.length})
+            </button>
+          </div>
+
+          {feedbackMsg && (
+            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+              <Check className="w-3.5 h-3.5 shrink-0" />
+              <span>{feedbackMsg}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+          {errorMsg && (
+            <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {/* TAB 1: CUSTOM / MANUAL ITEM FORM */}
+          {entryTab === 'custom' && (
+            <div className="space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-7">
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Item Name (आइटम का नाम) *
+                  </label>
+                  <input
+                    type="text"
+                    value={itemName}
+                    onChange={e => {
+                      setItemName(e.target.value);
+                      if (errorMsg) setErrorMsg(null);
+                    }}
+                    placeholder="e.g. Basmati Rice 1kg / Loose Sugar"
+                    autoFocus
+                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="sm:col-span-5">
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Rate / Price ({settings.currencySymbol}) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={unitPrice}
+                    onChange={e => {
+                      setUnitPrice(e.target.value);
+                      if (errorMsg) setErrorMsg(null);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddCustomSubmit(mode !== 'new-invoice');
+                      }
+                    }}
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 text-xs sm:text-sm font-mono font-semibold bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* Quantity */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Quantity (मात्रा)
+                  </label>
+                  <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-lg bg-white dark:bg-neutral-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                      className="px-2.5 py-2 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 cursor-pointer"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      value={quantity}
+                      onChange={e => setQuantity(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-full text-center text-xs sm:text-sm font-mono font-semibold bg-transparent text-neutral-900 dark:text-neutral-100 focus:outline-hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setQuantity(q => q + 1)}
+                      className="px-2.5 py-2 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Unit */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Unit (इकाई)
+                  </label>
+                  <select
+                    value={unit}
+                    onChange={e => setUnit(e.target.value as Product['unit'])}
+                    className="w-full px-2.5 py-2 text-xs sm:text-sm bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:border-emerald-500"
+                  >
+                    {UNITS.map(u => (
+                      <option key={u} value={u}>
+                        {u.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* GST % */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    GST / Tax (%)
+                  </label>
+                  <select
+                    value={taxRate}
+                    onChange={e => setTaxRate(Number(e.target.value))}
+                    className="w-full px-2.5 py-2 text-xs sm:text-sm font-mono bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:border-emerald-500"
+                  >
+                    {GST_RATES.map(r => (
+                      <option key={r} value={r}>
+                        GST {r}%
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Item Discount % */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Discount (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={discountPercent}
+                    onChange={e =>
+                      setDiscountPercent(Math.max(0, Math.min(100, Number(e.target.value) || 0)))
+                    }
+                    className="w-full px-3 py-2 text-xs sm:text-sm font-mono bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              {/* Save to Inventory Option */}
+              <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-800 space-y-2.5">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-neutral-800 dark:text-neutral-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={saveToInventory}
+                    onChange={e => setSaveToInventory(e.target.checked)}
+                    className="w-4 h-4 rounded border-neutral-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>
+                    Save this item to Inventory Catalog as well (इस आइटम को इन्वेंटरी में भी सेव करें)
+                  </span>
+                </label>
+
+                {saveToInventory && (
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <label className="block text-[11px] text-neutral-500 mb-1">
+                        Category (श्रेणी)
+                      </label>
+                      <input
+                        type="text"
+                        value={category}
+                        onChange={e => setCategory(e.target.value)}
+                        placeholder="General / Grocery"
+                        className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-900 dark:text-neutral-100 focus:outline-hidden"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-neutral-500 mb-1">
+                        Opening Stock (कुल स्टॉक)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={initialStock}
+                        onChange={e => setInitialStock(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-full px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-900 dark:text-neutral-100 focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Live Line Summary & Quick Add Action */}
+              <div className="p-3 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-neutral-700 dark:text-neutral-300 font-mono">
+                  <span>Subtotal: ₹{customPreview.net.toFixed(2)}</span>
+                  <span className="mx-2 text-neutral-400">·</span>
+                  <span>GST: ₹{customPreview.taxAmt.toFixed(2)}</span>
+                  <span className="mx-2 text-neutral-400">·</span>
+                  <strong className="text-sm text-emerald-800 dark:text-emerald-300">
+                    Line Total: {formatCurrency(customPreview.total, settings.currencySymbol)}
+                  </strong>
+                </div>
+
+                {mode === 'new-invoice' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleAddCustomSubmit(false)}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add to Invoice List</span>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAddCustomSubmit(false)}
+                      className="px-3 py-1.5 rounded-lg border border-emerald-600 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/40 text-xs font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add & More</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddCustomSubmit(true)}
+                      className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>+ Add Item</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: PICK FROM INVENTORY CATALOG */}
+          {entryTab === 'catalog' && (
+            <div className="space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+                <input
+                  type="text"
+                  value={catalogSearch}
+                  onChange={e => setCatalogSearch(e.target.value)}
+                  placeholder="Search inventory product by name, Hindi, or barcode..."
+                  autoFocus
+                  className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                />
+              </div>
+
+              {products.length === 0 ? (
+                <div className="py-8 px-4 text-center rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 space-y-2.5">
+                  <ShoppingBag className="w-8 h-8 mx-auto text-neutral-400 stroke-1" />
+                  <p className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                    इन्वेंटरी अभी खाली है (No products saved in Inventory yet)
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setEntryTab('custom')}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Write Custom / New Item Instead</span>
+                  </button>
+                </div>
+              ) : filteredCatalog.length === 0 ? (
+                <div className="py-6 px-4 text-center rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 space-y-2">
+                  <p className="text-xs text-neutral-500">
+                    No inventory product matching "{catalogSearch}"
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setItemName(catalogSearch);
+                      setEntryTab('custom');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add "{catalogSearch}" as Custom Item</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="max-h-60 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg">
+                  {filteredCatalog.map(prod => {
+                    const qty = catalogQuantities[prod.id] || 1;
+                    const outOfStock = prod.stock <= 0;
+                    return (
+                      <div
+                        key={prod.id}
+                        className="p-2.5 px-3 flex items-center justify-between gap-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs sm:text-sm font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                            {prod.name}
+                          </div>
+                          <div className="text-[11px] text-neutral-500 font-mono mt-0.5">
+                            <span>{prod.category}</span>
+                            <span className="mx-1.5">·</span>
+                            <span>
+                              Stock: {prod.stock} {prod.unit}
+                            </span>
+                            <span className="mx-1.5">·</span>
+                            <span>GST {prod.taxRate}%</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right font-mono font-bold text-xs sm:text-sm text-neutral-900 dark:text-neutral-100 shrink-0">
+                          {formatCurrency(prod.sellingPrice, settings.currencySymbol)}
+                        </div>
+
+                        <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-md bg-white dark:bg-neutral-800 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCatalogQuantities(prev => ({
+                                ...prev,
+                                [prod.id]: Math.max(1, (prev[prod.id] || 1) - 1),
+                              }))
+                            }
+                            className="w-6 h-6 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="w-7 text-center text-xs font-mono font-semibold text-neutral-900 dark:text-neutral-100">
+                            {qty}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCatalogQuantities(prev => ({
+                                ...prev,
+                                [prod.id]: (prev[prod.id] || 1) + 1,
+                              }))
+                            }
+                            className="w-6 h-6 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={outOfStock}
+                          onClick={() => handleAddCatalogProduct(prod, false)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>{outOfStock ? 'Out' : 'Add'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* NEW INVOICE MODE: Draft Items Summary & Customer / Payment Details */}
+          {mode === 'new-invoice' && (
+            <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                  Invoice Items ({draftItems.length})
+                </h4>
+                {draftItems.length > 0 && (
+                  <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    Total Payable: {formatCurrency(draftTotals.grandTotal, settings.currencySymbol)}
+                  </span>
+                )}
+              </div>
+
+              {draftItems.length === 0 ? (
+                <p className="text-xs text-neutral-400 py-2">
+                  ऊपर से आइटम जोड़ें — वे इस इनवॉइस में यहाँ दिखेंगे (Items added above will appear here).
+                </p>
+              ) : (
+                <div className="max-h-36 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg">
+                  {draftItems.map((it, idx) => (
+                    <div
+                      key={idx}
+                      className="px-3 py-2 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <span className="font-semibold text-neutral-900 dark:text-neutral-100 truncate block">
+                          {it.name}
+                        </span>
+                        <span className="text-[11px] text-neutral-500 font-mono">
+                          ₹{it.unitPrice} × {it.quantity} {it.unit} · GST {it.taxRate}%
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDraftItems(prev =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, quantity: Math.max(1, row.quantity - 1) } : row
+                              )
+                            )
+                          }
+                          className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="w-6 text-center font-mono font-semibold">
+                          {it.quantity}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDraftItems(prev =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, quantity: row.quantity + 1 } : row
+                              )
+                            )
+                          }
+                          className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDraftItems(prev => prev.filter((_, i) => i !== idx))}
+                          className="p-1 text-neutral-400 hover:text-rose-600 cursor-pointer"
+                          title="Remove item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Customer & Payment Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={e => setCustomerName(e.target.value)}
+                  placeholder="Customer Name (ग्राहक नाम)"
+                  className="px-3 py-2 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                />
+                <input
+                  type="tel"
+                  maxLength={10}
+                  value={customerPhone}
+                  onChange={e => setCustomerPhone(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Mobile No. (मोबाइल नंबर)"
+                  className="px-3 py-2 text-xs font-mono bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                />
+                <div className="grid grid-cols-3 gap-1">
+                  {(
+                    [
+                      { id: 'cash', label: 'Cash', icon: Banknote },
+                      { id: 'upi', label: 'UPI', icon: QrCode },
+                      { id: 'card', label: 'Card', icon: CreditCard },
+                    ] as const
+                  ).map(pm => {
+                    const Icon = pm.icon;
+                    return (
+                      <button
+                        key={pm.id}
+                        type="button"
+                        onClick={() => setPaymentMethod(pm.id)}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 border transition-colors cursor-pointer ${
+                          paymentMethod === pm.id
+                            ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                            : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        <span>{pm.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 sm:px-5 py-3 bg-neutral-50 dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-xs font-semibold text-neutral-700 dark:text-neutral-300 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors whitespace-nowrap cursor-pointer"
+          >
+            {mode === 'new-invoice' ? 'Cancel' : 'Done / Close'}
+          </button>
+
+          {mode === 'new-invoice' && (
+            <button
+              type="button"
+              onClick={handleFinalizeNewInvoice}
+              className="px-5 py-2 rounded-lg text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Receipt className="w-4 h-4" />
+              <span>Generate Invoice (इनवॉइस बनाएं)</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

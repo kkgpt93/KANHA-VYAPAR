@@ -14,10 +14,15 @@ import {
   Building2,
   KeyRound,
   Link2,
+  Palette,
+  Sun,
+  Moon,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { StoreSettings } from '../types';
 import { formatDate } from '../utils/formatters';
+import { COLOR_THEMES } from '../utils/themes';
 
 export const SettingsBackup: React.FC = () => {
   const {
@@ -34,6 +39,10 @@ export const SettingsBackup: React.FC = () => {
     setActiveTab,
     pendingEntryAction,
     clearPendingEntryAction,
+    colorTheme,
+    setColorTheme,
+    isDarkMode,
+    toggleDarkMode,
   } = useApp();
 
   const [formData, setFormData] = useState<StoreSettings>({ ...settings });
@@ -142,6 +151,85 @@ export const SettingsBackup: React.FC = () => {
       </div>
 
       <div className="p-4 lg:p-6 space-y-6 max-w-5xl w-full mx-auto">
+        {/* Signature Color Theme & Appearance Card */}
+        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl brand-command-surface text-white flex items-center justify-center border">
+                <Palette className="w-5 h-5 brand-gold-text" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
+                  Signature App Color Theme (विशेष कलर थीम चुनें)
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  अपने POS सॉफ्टवेयर के लिए आकर्षक सिग्नेचर कलर पैलेट और Light/Dark मोड चुनें
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleDarkMode}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 transition-colors cursor-pointer"
+            >
+              {isDarkMode ? (
+                <>
+                  <Sun className="w-4 h-4 text-amber-500" />
+                  <span>Switch to Light Mode</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-4 h-4 text-emerald-600" />
+                  <span>Switch to Dark Mode</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            {COLOR_THEMES.map(theme => {
+              const isSelected = colorTheme === theme.id;
+              return (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => setColorTheme(theme.id)}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2.5 ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 shadow-xs'
+                      : 'border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950/50 hover:border-neutral-300 dark:hover:border-neutral-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center -space-x-1.5">
+                      <span
+                        className="w-5 h-5 rounded-full border-2 border-white dark:border-neutral-900"
+                        style={{ backgroundColor: theme.commandHex }}
+                      />
+                      <span
+                        className="w-5 h-5 rounded-full border-2 border-white dark:border-neutral-900"
+                        style={{ backgroundColor: theme.accentHex }}
+                      />
+                      <span
+                        className="w-4 h-4 rounded-full border-2 border-white dark:border-neutral-900"
+                        style={{ backgroundColor: theme.highlightHex }}
+                      />
+                    </div>
+                    {isSelected && <Check className="w-4 h-4 text-emerald-600" />}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-neutral-900 dark:text-neutral-100 leading-snug">
+                      {theme.name}
+                    </div>
+                    <div className="text-[11px] text-neutral-500 mt-0.5">{theme.nameHindi}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Annual Software License & Keygen Quick Card */}
         <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -150,11 +238,19 @@ export const SettingsBackup: React.FC = () => {
             </div>
             <div>
               <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
-                Annual Software License ({licenseEvaluation.daysRemaining} Days Remaining)
+                {licenseEvaluation.isCreatorLifetime
+                  ? 'Creator Lifetime License (Always Valid — Unlimited)'
+                  : licenseEvaluation.isPublicTrial
+                  ? `2-Day Public License (${licenseEvaluation.hoursRemaining} Hours Remaining)`
+                  : `Annual Software License (${licenseEvaluation.daysRemaining} Days Remaining)`}
               </h3>
               <p className="text-xs text-neutral-500 font-mono tabular-nums">
                 System ID: {licenseState.installationId}
-                {licenseState.expiresAt ? ` · Valid Until: ${formatDate(licenseState.expiresAt)}` : ''}
+                {licenseEvaluation.isCreatorLifetime
+                  ? ' · Valid Until: Never Expires'
+                  : licenseState.expiresAt
+                  ? ` · Valid Until: ${formatDate(licenseState.expiresAt)}`
+                  : ''}
               </p>
             </div>
           </div>

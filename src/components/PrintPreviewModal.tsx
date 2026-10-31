@@ -1,28 +1,24 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import QRCode from 'qrcode';
 import {
   Printer,
   Share2,
   X,
-  CheckCircle2,
   Copy,
-  Receipt,
-  Download,
-  Phone,
-  QrCode,
   ZoomIn,
   ZoomOut,
-  Maximize2,
   Sliders,
   Check,
-  FileText,
   Building2,
-  Sparkles,
-  Info,
+  Plus,
+  Minus,
+  Trash2,
+  Pencil,
 } from 'lucide-react';
 import { Invoice } from '../types';
 import { useApp } from '../context/AppContext';
-import { formatCurrency, formatDateTime, buildWhatsAppInvoiceText } from '../utils/formatters';
+import { formatDateTime, buildWhatsAppInvoiceText } from '../utils/formatters';
+import { AddInvoiceItemModal } from './AddInvoiceItemModal';
 
 export type ReceiptFormat = 'thermal80' | 'tax_invoice' | 'thermal58';
 
@@ -30,6 +26,7 @@ export interface PrintPreviewModalProps {
   invoice: Invoice | null;
   isOpen?: boolean;
   isDraft?: boolean;
+  initialAddItemOpen?: boolean;
   onClose: () => void;
   onCompleteSale?: () => void;
 }
@@ -38,14 +35,19 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   invoice,
   isOpen = true,
   isDraft = false,
+  initialAddItemOpen = false,
   onClose,
   onCompleteSale,
 }) => {
-  const { settings } = useApp();
+  const { settings, invoices, updateInvoiceItemQuantity } = useApp();
   const [upiQrUrl, setUpiQrUrl] = useState<string>('');
   const [format, setFormat] = useState<ReceiptFormat>('thermal80');
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [copied, setCopied] = useState(false);
+
+  // Add Item & Edit Item Qty states
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [isEditingItems, setIsEditingItems] = useState(false);
 
   // Customization toggles
   const [showQr, setShowQr] = useState(true);
@@ -54,15 +56,31 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [showTerms, setShowTerms] = useState(true);
   const [showCustomizer, setShowCustomizer] = useState(false);
 
+  // Resolve live invoice from AppContext so added/updated items reflect immediately
+  const liveInvoice = useMemo(() => {
+    if (!invoice) return null;
+    if (isDraft) return invoice;
+    return invoices.find(i => i.id === invoice.id) || invoice;
+  }, [invoice, invoices, isDraft]);
+
+  useEffect(() => {
+    if (liveInvoice && initialAddItemOpen && liveInvoice.status === 'paid') {
+      setIsAddItemModalOpen(true);
+    } else if (!liveInvoice) {
+      setIsAddItemModalOpen(false);
+      setIsEditingItems(false);
+    }
+  }, [liveInvoice?.id, initialAddItemOpen]);
+
   // Generate UPI QR Code
   useEffect(() => {
-    if (!invoice) return;
+    if (!liveInvoice) return;
 
     const upiString = `upi://pay?pa=${encodeURIComponent(
       settings.upiVpa || 'vyapar@okhdfcbank'
-    )}&pn=${encodeURIComponent(settings.storeName)}&am=${invoice.grandTotal.toFixed(
+    )}&pn=${encodeURIComponent(settings.storeName)}&am=${liveInvoice.grandTotal.toFixed(
       2
-    )}&cu=INR&tn=${encodeURIComponent(invoice.invoiceNumber)}`;
+    )}&cu=INR&tn=${encodeURIComponent(liveInvoice.invoiceNumber)}`;
 
     QRCode.toDataURL(upiString, {
       width: 140,
@@ -74,35 +92,39 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     })
       .then(url => setUpiQrUrl(url))
       .catch(() => setUpiQrUrl(''));
-  }, [invoice, settings]);
+  }, [liveInvoice, settings]);
 
   // Keyboard shortcut listener for Escape and Ctrl+P
   useEffect(() => {
-    if (!invoice && !isOpen) return;
+    if (!liveInvoice && !isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isAddItemModalOpen) return;
       if (e.key === 'Escape') {
         onClose();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        handlePrint();
+        window.print();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [invoice, isOpen, onClose]);
+  }, [liveInvoice, isOpen, isAddItemModalOpen, onClose]);
 
-  if (!invoice && !isOpen) return null;
-  if (!invoice) return null;
+  if (!liveInvoice && !isOpen) return null;
+  if (!liveInvoice) return null;
+
+  const invoiceData = liveInvoice;
+  const canModifyInvoice = invoiceData.status === 'paid';
 
   const handlePrint = () => {
     window.print();
   };
 
   const handleWhatsAppShare = () => {
-    const text = buildWhatsAppInvoiceText(invoice, settings);
-    const phone = invoice.customerPhone ? invoice.customerPhone.replace(/\D/g, '') : '';
+    const text = buildWhatsAppInvoiceText(invoiceData, settings);
+    const phone = invoiceData.customerPhone ? invoiceData.customerPhone.replace(/\D/g, '') : '';
     const cleanPhone = phone.length === 10 ? `91${phone}` : phone;
     const url = cleanPhone
       ? `https://wa.me/${cleanPhone}?text=${text}`
@@ -111,7 +133,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
 
   const handleCopySummary = () => {
-    const text = decodeURIComponent(buildWhatsAppInvoiceText(invoice, settings));
+    const text = decodeURIComponent(buildWhatsAppInvoiceText(invoiceData, settings));
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -154,29 +176,47 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
                   {isDraft ? 'Draft Bill Print Preview' : 'Print Preview & Invoice'}
                 </h3>
+                <span className="text-neutral-400">·</span>
                 {isDraft ? (
-                  <span className="px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 rounded">
+                  <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">
                     Draft / Pre-Check
                   </span>
                 ) : (
-                  <span className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 rounded font-mono">
-                    {invoice.invoiceNumber}
+                  <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 font-mono">
+                    {invoiceData.invoiceNumber}
                   </span>
                 )}
               </div>
               <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                Preview exact printer output according to CSS media rules. Press <kbd className="font-mono px-1 py-0.5 bg-neutral-200 dark:bg-neutral-800 rounded text-[10px]">Ctrl+P</kbd> to print.
+                Preview exact printer output or add items directly. Press{' '}
+                <kbd className="font-mono px-1 py-0.5 bg-neutral-200 dark:bg-neutral-800 rounded text-[10px]">
+                  Ctrl+P
+                </kbd>{' '}
+                to print.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Format Selector Pills */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* + Add Item Primary Action inside Invoice Header */}
+            {canModifyInvoice && (
+              <button
+                type="button"
+                onClick={() => setIsAddItemModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                title="Add Item to Invoice (इनवॉइस में आइटम जोड़ें)"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Item</span>
+              </button>
+            )}
+
+            {/* Format Selector Segmented Control */}
             <div className="flex items-center bg-neutral-200 dark:bg-neutral-800 p-0.5 rounded-lg text-xs font-medium">
               <button
                 type="button"
                 onClick={() => setFormat('thermal80')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
+                className={`px-2.5 py-1 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                   format === 'thermal80'
                     ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                     : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
@@ -187,7 +227,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               <button
                 type="button"
                 onClick={() => setFormat('tax_invoice')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
+                className={`px-2.5 py-1 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                   format === 'tax_invoice'
                     ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                     : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
@@ -198,7 +238,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               <button
                 type="button"
                 onClick={() => setFormat('thermal58')}
-                className={`px-2.5 py-1 rounded-md transition-colors ${
+                className={`px-2.5 py-1 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                   format === 'thermal58'
                     ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-xs'
                     : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
@@ -213,7 +253,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               type="button"
               onClick={() => setShowCustomizer(!showCustomizer)}
               title="Customize Print Layout"
-              className={`p-1.5 rounded-lg border transition-colors ${
+              className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
                 showCustomizer
                   ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-600'
                   : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
@@ -226,7 +266,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -311,16 +351,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
         {/* Paper Canvas Area */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
-          {/* Paper Sheet Preview Info Badge (no-print) */}
-          <div className="mb-3 px-3 py-1 bg-white/80 dark:bg-neutral-800/80 backdrop-blur-xs rounded-full border border-neutral-300 dark:border-neutral-700 text-[11px] font-mono text-neutral-600 dark:text-neutral-300 flex items-center gap-2 no-print shadow-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>
-              {format === 'thermal80'
-                ? '80mm Roll Width (~320px) • Direct Thermal POS Output'
-                : format === 'tax_invoice'
-                ? 'A4 Sheet Size (210mm × 297mm) • Formal GST Tax Invoice'
-                : '58mm Roll Width (~240px) • Mini Mobile Bluetooth POS'}
-            </span>
+          {/* Paper Sheet Preview Metadata (no-print, clean unboxed text) */}
+          <div className="mb-3 text-[11px] font-mono text-neutral-600 dark:text-neutral-400 no-print">
+            {format === 'thermal80'
+              ? '80mm Roll Width (~320px) · Direct Thermal POS Output'
+              : format === 'tax_invoice'
+              ? 'A4 Sheet Size (210mm × 297mm) · Formal GST Tax Invoice'
+              : '58mm Roll Width (~240px) · Mini Mobile Bluetooth POS'}
           </div>
 
           {/* Printable Document Container (Hooked to #printable-receipt for Print Media Queries) */}
@@ -369,31 +406,31 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   <div className="py-2.5 border-b border-dashed border-neutral-400 space-y-1.5 text-[11px]">
                     <div className="flex justify-between">
                       <span className="text-neutral-600 font-semibold">INVOICE:</span>
-                      <span className="font-bold font-mono">{invoice.invoiceNumber}</span>
+                      <span className="font-bold font-mono">{invoiceData.invoiceNumber}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-neutral-600">DATE & TIME:</span>
-                      <span>{formatDateTime(invoice.createdAt)}</span>
+                      <span>{formatDateTime(invoiceData.createdAt)}</span>
                     </div>
 
                     {/* Customer Name */}
                     <div className="flex justify-between items-start gap-2">
                       <span className="text-neutral-600 font-semibold shrink-0">CUSTOMER:</span>
                       <span className="font-bold text-neutral-900 text-right break-words max-w-[200px]">
-                        {invoice.customerName || 'Walk-in Customer'}
+                        {invoiceData.customerName || 'Walk-in Customer'}
                       </span>
                     </div>
 
                     {/* Customer Mobile Number */}
-                    {invoice.customerPhone ? (
+                    {invoiceData.customerPhone ? (
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-neutral-600 font-semibold shrink-0">MOBILE NO:</span>
                         <span className="font-mono font-bold text-neutral-900 text-right">
-                          +91 {invoice.customerPhone.replace(/\D/g, '')}
+                          +91 {invoiceData.customerPhone.replace(/\D/g, '')}
                         </span>
                       </div>
                     ) : (
-                      invoice.customerName && invoice.customerName !== 'Walk-in Customer' ? (
+                      invoiceData.customerName && invoiceData.customerName !== 'Walk-in Customer' ? (
                         <div className="flex justify-between items-center gap-2 text-neutral-400">
                           <span className="text-neutral-500">MOBILE NO:</span>
                           <span className="font-mono text-[10px]">--</span>
@@ -402,26 +439,26 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     )}
 
                     {/* Customer Address (if provided) */}
-                    {invoice.customerAddress && (
+                    {invoiceData.customerAddress && (
                       <div className="flex justify-between items-start gap-2 text-[10px]">
                         <span className="text-neutral-600 shrink-0">ADDRESS:</span>
                         <span className="text-right text-neutral-700 max-w-[190px] leading-tight break-words">
-                          {invoice.customerAddress}
+                          {invoiceData.customerAddress}
                         </span>
                       </div>
                     )}
 
                     {/* Customer GSTIN (if provided) */}
-                    {invoice.customerGstin && (
+                    {invoiceData.customerGstin && (
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-neutral-600 shrink-0">CUST. GSTIN:</span>
-                        <span className="font-mono font-bold text-neutral-900">{invoice.customerGstin}</span>
+                        <span className="font-mono font-bold text-neutral-900">{invoiceData.customerGstin}</span>
                       </div>
                     )}
 
                     <div className="flex justify-between">
                       <span className="text-neutral-600">CASHIER:</span>
-                      <span>{invoice.cashierName}</span>
+                      <span>{invoiceData.cashierName}</span>
                     </div>
                   </div>
 
@@ -435,75 +472,143 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     </div>
 
                     <div className="divide-y divide-neutral-200 py-1 space-y-1">
-                      {invoice.items.map((item, idx) => (
-                        <div key={idx} className="grid grid-cols-12 text-[11px] pt-1">
-                          <div className="col-span-6 pr-1">
-                            <p className="font-semibold text-neutral-900 leading-tight truncate">
-                              {item.name}
-                            </p>
-                            {showTaxBreakup && item.taxRate > 0 && (
-                              <p className="text-[9px] text-neutral-500">GST {item.taxRate}%</p>
-                            )}
+                      {invoiceData.items.map((item, idx) => (
+                        <div key={idx} className="pt-1">
+                          <div className="grid grid-cols-12 text-[11px]">
+                            <div className="col-span-6 pr-1">
+                              <p className="font-semibold text-neutral-900 leading-tight truncate">
+                                {item.name}
+                              </p>
+                              {showTaxBreakup && item.taxRate > 0 && (
+                                <p className="text-[9px] text-neutral-500">GST {item.taxRate}%</p>
+                              )}
+                            </div>
+                            <span className="col-span-2 text-center tabular-nums font-mono">
+                              {item.quantity}
+                            </span>
+                            <span className="col-span-2 text-right tabular-nums font-mono">
+                              ₹{item.unitPrice.toFixed(0)}
+                            </span>
+                            <span className="col-span-2 text-right font-bold tabular-nums font-mono">
+                              ₹{item.total.toFixed(0)}
+                            </span>
                           </div>
-                          <span className="col-span-2 text-center tabular-nums font-mono">
-                            {item.quantity}
-                          </span>
-                          <span className="col-span-2 text-right tabular-nums font-mono">
-                            ₹{item.unitPrice.toFixed(0)}
-                          </span>
-                          <span className="col-span-2 text-right font-bold tabular-nums font-mono">
-                            ₹{item.total.toFixed(0)}
-                          </span>
+
+                          {/* Optional inline quantity adjustment controls (no-print) */}
+                          {!isDraft && canModifyInvoice && isEditingItems && (
+                            <div className="no-print mt-1 pb-0.5 flex items-center justify-end gap-1.5 text-[10px] font-sans">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity - 1)
+                                }
+                                disabled={item.quantity <= 1 && invoiceData.items.length <= 1}
+                                className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 disabled:opacity-40 cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <span className="font-mono font-semibold text-neutral-700">
+                                Qty: {item.quantity}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity + 1)
+                                }
+                                className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 cursor-pointer"
+                              >
+                                +
+                              </button>
+                              {invoiceData.items.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateInvoiceItemQuantity(invoiceData.id, idx, 0)}
+                                  className="px-1.5 py-0.5 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                                  title="Remove item from invoice"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
+
+                    {/* Inline + Add Item Button inside Thermal Invoice (no-print) */}
+                    {canModifyInvoice && (
+                      <div className="no-print mt-2 pt-2 border-t border-dotted border-neutral-300 flex items-center justify-between gap-1.5 font-sans">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddItemModalOpen(true)}
+                          className="flex-1 py-1.5 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Add Item (आइटम जोड़ें)</span>
+                        </button>
+                        {!isDraft && (
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingItems(prev => !prev)}
+                            className={`py-1.5 px-2.5 rounded-md border text-[11px] font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer ${
+                              isEditingItems
+                                ? 'border-neutral-800 bg-neutral-900 text-white'
+                                : 'border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700'
+                            }`}
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>{isEditingItems ? 'Done' : 'Edit Qty'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Calculation Breakdown */}
                   <div className="py-2.5 border-b border-dashed border-neutral-400 space-y-1 text-[11px]">
                     <div className="flex justify-between text-neutral-600">
-                      <span>Subtotal ({invoice.items.length} items):</span>
-                      <span className="tabular-nums font-mono">₹{invoice.subtotal.toFixed(2)}</span>
+                      <span>Subtotal ({invoiceData.items.length} items):</span>
+                      <span className="tabular-nums font-mono">₹{invoiceData.subtotal.toFixed(2)}</span>
                     </div>
 
-                    {invoice.discountTotal > 0 && (
+                    {invoiceData.discountTotal > 0 && (
                       <div className="flex justify-between text-neutral-700">
                         <span>Discount:</span>
-                        <span className="tabular-nums font-mono">-₹{invoice.discountTotal.toFixed(2)}</span>
+                        <span className="tabular-nums font-mono">-₹{invoiceData.discountTotal.toFixed(2)}</span>
                       </div>
                     )}
 
-                    {showTaxBreakup && invoice.taxTotal > 0 && (
+                    {showTaxBreakup && invoiceData.taxTotal > 0 && (
                       <div className="flex justify-between text-neutral-600">
                         <span>GST / Tax Total:</span>
-                        <span className="tabular-nums font-mono">₹{invoice.taxTotal.toFixed(2)}</span>
+                        <span className="tabular-nums font-mono">₹{invoiceData.taxTotal.toFixed(2)}</span>
                       </div>
                     )}
 
                     <div className="flex justify-between text-sm font-extrabold pt-1 text-neutral-900 border-t border-neutral-300">
                       <span>GRAND TOTAL:</span>
-                      <span className="tabular-nums font-mono">₹{invoice.grandTotal.toFixed(2)}</span>
+                      <span className="tabular-nums font-mono">₹{invoiceData.grandTotal.toFixed(2)}</span>
                     </div>
 
                     <div className="flex justify-between text-[10px] text-neutral-700 pt-1">
                       <span>Payment Method:</span>
                       <span className="uppercase font-bold">
-                        {invoice.paymentMethod} ({invoice.status})
+                        {invoiceData.paymentMethod} ({invoiceData.status})
                       </span>
                     </div>
 
-                    {invoice.paymentMethod === 'cash' && invoice.amountTendered !== undefined && (
+                    {invoiceData.paymentMethod === 'cash' && invoiceData.amountTendered !== undefined && (
                       <>
                         <div className="flex justify-between text-[10px] text-neutral-600">
                           <span>Cash Tendered:</span>
                           <span className="tabular-nums font-mono">
-                            ₹{invoice.amountTendered.toFixed(2)}
+                            ₹{invoiceData.amountTendered.toFixed(2)}
                           </span>
                         </div>
                         <div className="flex justify-between text-[10px] text-neutral-900 font-bold">
                           <span>Change Returned:</span>
                           <span className="tabular-nums font-mono">
-                            ₹{(invoice.changeDue || 0).toFixed(2)}
+                            ₹{(invoiceData.changeDue || 0).toFixed(2)}
                           </span>
                         </div>
                       </>
@@ -580,15 +685,15 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                       <div className="mt-2 text-xs font-mono space-y-0.5">
                         <div>
                           <span className="text-neutral-500">Invoice No: </span>
-                          <span className="font-bold text-neutral-900">{invoice.invoiceNumber}</span>
+                          <span className="font-bold text-neutral-900">{invoiceData.invoiceNumber}</span>
                         </div>
                         <div>
                           <span className="text-neutral-500">Date: </span>
-                          <span>{formatDateTime(invoice.createdAt)}</span>
+                          <span>{formatDateTime(invoiceData.createdAt)}</span>
                         </div>
                         <div>
                           <span className="text-neutral-500">Cashier: </span>
-                          <span>{invoice.cashierName}</span>
+                          <span>{invoiceData.cashierName}</span>
                         </div>
                       </div>
                     </div>
@@ -604,30 +709,30 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         <div className="flex items-start gap-1.5">
                           <span className="text-neutral-500 text-[11px] w-24 shrink-0 font-medium">Customer Name:</span>
                           <span className="font-bold text-neutral-900 text-sm">
-                            {invoice.customerName || 'Walk-in Customer'}
+                            {invoiceData.customerName || 'Walk-in Customer'}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5 font-mono">
                           <span className="text-neutral-500 text-[11px] font-sans w-24 shrink-0 font-medium">Mobile No:</span>
                           <span className="font-bold text-neutral-900 text-xs">
-                            {invoice.customerPhone
-                              ? `+91 ${invoice.customerPhone.replace(/\D/g, '')}`
+                            {invoiceData.customerPhone
+                              ? `+91 ${invoiceData.customerPhone.replace(/\D/g, '')}`
                               : 'Walk-in (Not Specified)'}
                           </span>
                         </div>
-                        {invoice.customerAddress && (
+                        {invoiceData.customerAddress && (
                           <div className="flex items-start gap-1.5 text-[11px]">
                             <span className="text-neutral-500 w-24 shrink-0 font-medium">Address:</span>
                             <span className="text-neutral-700 leading-snug">
-                              {invoice.customerAddress}
+                              {invoiceData.customerAddress}
                             </span>
                           </div>
                         )}
-                        {invoice.customerGstin && (
+                        {invoiceData.customerGstin && (
                           <div className="flex items-center gap-1.5 font-mono text-[11px]">
                             <span className="text-neutral-500 font-sans w-24 shrink-0 font-medium">GSTIN / UIN:</span>
                             <span className="font-bold text-neutral-900">
-                              {invoice.customerGstin}
+                              {invoiceData.customerGstin}
                             </span>
                           </div>
                         )}
@@ -640,10 +745,10 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           Payment Details:
                         </h4>
                         <p className="font-semibold text-neutral-900 uppercase">
-                          Mode: {invoice.paymentMethod}
+                          Mode: {invoiceData.paymentMethod}
                         </p>
                         <p className="text-neutral-600 text-[11px]">
-                          Status: <span className="font-bold text-emerald-700 uppercase">{invoice.status}</span>
+                          Status: <span className="font-bold text-emerald-700 uppercase">{invoiceData.status}</span>
                         </p>
                       </div>
 
@@ -671,7 +776,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           <th className="p-2 border-r border-neutral-300 w-10 text-center">#</th>
                           <th className="p-2 border-r border-neutral-300">Item Description</th>
                           <th className="p-2 border-r border-neutral-300 text-center w-16">Unit</th>
-                          <th className="p-2 border-r border-neutral-300 text-center w-14">Qty</th>
+                          <th className="p-2 border-r border-neutral-300 text-center w-20">Qty</th>
                           <th className="p-2 border-r border-neutral-300 text-right w-20">Rate (₹)</th>
                           <th className="p-2 border-r border-neutral-300 text-center w-16">GST %</th>
                           <th className="p-2 border-r border-neutral-300 text-right w-20">Tax (₹)</th>
@@ -679,24 +784,63 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-neutral-200">
-                        {invoice.items.map((item, idx) => (
+                        {invoiceData.items.map((item, idx) => (
                           <tr key={idx} className="hover:bg-neutral-50">
                             <td className="p-2 border-r border-neutral-200 text-center text-neutral-500">
                               {idx + 1}
                             </td>
                             <td className="p-2 border-r border-neutral-200">
-                              <span className="font-bold text-neutral-900 block">{item.name}</span>
-                              {item.barcode && (
-                                <span className="text-[10px] text-neutral-500 font-mono">
-                                  SKU: {item.barcode}
-                                </span>
-                              )}
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <span className="font-bold text-neutral-900 block">{item.name}</span>
+                                  {item.barcode && (
+                                    <span className="text-[10px] text-neutral-500 font-mono">
+                                      SKU: {item.barcode}
+                                    </span>
+                                  )}
+                                </div>
+                                {!isDraft && canModifyInvoice && isEditingItems && invoiceData.items.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateInvoiceItemQuantity(invoiceData.id, idx, 0)}
+                                    className="no-print p-1 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                                    title="Remove item"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td className="p-2 border-r border-neutral-200 text-center text-neutral-600">
                               {item.unit || 'pcs'}
                             </td>
                             <td className="p-2 border-r border-neutral-200 text-center font-mono font-bold">
-                              {item.quantity}
+                              {!isDraft && canModifyInvoice && isEditingItems ? (
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity - 1)
+                                    }
+                                    disabled={item.quantity <= 1 && invoiceData.items.length <= 1}
+                                    className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 disabled:opacity-40 cursor-pointer"
+                                  >
+                                    <Minus className="w-2.5 h-2.5" />
+                                  </button>
+                                  <span>{item.quantity}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity + 1)
+                                    }
+                                    className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 cursor-pointer"
+                                  >
+                                    <Plus className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                item.quantity
+                              )}
                             </td>
                             <td className="p-2 border-r border-neutral-200 text-right font-mono">
                               {item.unitPrice.toFixed(2)}
@@ -714,6 +858,35 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         ))}
                       </tbody>
                     </table>
+
+                    {/* Inline + Add Item Bar inside A4 Tax Invoice (no-print) */}
+                    {canModifyInvoice && (
+                      <div className="no-print p-2.5 bg-neutral-50 border-t border-neutral-200 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddItemModalOpen(true)}
+                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Add Item to Invoice (आइटम जोड़ें)</span>
+                        </button>
+
+                        {!isDraft && (
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingItems(prev => !prev)}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                              isEditingItems
+                                ? 'border-neutral-800 bg-neutral-900 text-white'
+                                : 'border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700'
+                            }`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>{isEditingItems ? 'Done Editing Items' : 'Adjust Item Qty / Remove'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Summary, Total in Words & Signatory */}
@@ -725,7 +898,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           Total Amount in Words:
                         </span>
                         <p className="font-bold text-neutral-900 italic mt-0.5">
-                          {numberToIndianWords(invoice.grandTotal)}
+                          {numberToIndianWords(invoiceData.grandTotal)}
                         </p>
                       </div>
 
@@ -743,21 +916,21 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     <div className="col-span-5 text-xs space-y-1 border border-neutral-300 p-3 rounded-sm bg-neutral-50/50">
                       <div className="flex justify-between text-neutral-600">
                         <span>Taxable Subtotal:</span>
-                        <span className="font-mono font-bold">₹{invoice.subtotal.toFixed(2)}</span>
+                        <span className="font-mono font-bold">₹{invoiceData.subtotal.toFixed(2)}</span>
                       </div>
-                      {invoice.discountTotal > 0 && (
+                      {invoiceData.discountTotal > 0 && (
                         <div className="flex justify-between text-neutral-700">
                           <span>Discount Applied:</span>
-                          <span className="font-mono text-rose-600">-₹{invoice.discountTotal.toFixed(2)}</span>
+                          <span className="font-mono text-rose-600">-₹{invoiceData.discountTotal.toFixed(2)}</span>
                         </div>
                       )}
                       <div className="flex justify-between text-neutral-600">
                         <span>CGST + SGST (Total Tax):</span>
-                        <span className="font-mono">₹{invoice.taxTotal.toFixed(2)}</span>
+                        <span className="font-mono">₹{invoiceData.taxTotal.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-base font-extrabold text-neutral-900 pt-2 border-t-2 border-neutral-800">
                         <span>TOTAL PAYABLE:</span>
-                        <span className="font-mono">₹{invoice.grandTotal.toFixed(2)}</span>
+                        <span className="font-mono">₹{invoiceData.grandTotal.toFixed(2)}</span>
                       </div>
 
                       {/* Cashier / Signatory Placeholder */}
@@ -776,11 +949,22 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
         {/* Action Toolbar Bottom Bar (no-print) */}
         <div className="px-4 py-3 bg-neutral-100 dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3 no-print">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canModifyInvoice && (
+              <button
+                type="button"
+                onClick={() => setIsAddItemModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Item (आइटम जोड़ें)</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleCopySummary}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Copy className="w-3.5 h-3.5" />
               <span>{copied ? 'Copied to Clipboard!' : 'Copy Summary'}</span>
@@ -789,7 +973,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <button
               type="button"
               onClick={handleWhatsAppShare}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span>WhatsApp Receipt</span>
@@ -804,7 +988,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   onCompleteSale();
                   onClose();
                 }}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Check className="w-3.5 h-3.5" />
                 <span>Complete Sale & Print</span>
@@ -814,7 +998,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <button
               type="button"
               onClick={handlePrint}
-              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>Print Now (Ctrl+P)</span>
@@ -822,6 +1006,14 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Add Item Modal (adds to cart if Draft, or directly to existing saved Invoice) */}
+      <AddInvoiceItemModal
+        isOpen={isAddItemModalOpen}
+        mode={isDraft ? 'cart' : 'existing-invoice'}
+        targetInvoice={isDraft ? null : invoiceData}
+        onClose={() => setIsAddItemModalOpen(false)}
+      />
     </div>
   );
 };

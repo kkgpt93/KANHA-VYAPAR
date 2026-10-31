@@ -62,6 +62,22 @@ export interface InvoiceItem {
   total: number;
 }
 
+export interface InvoiceItemInput {
+  productId?: string;
+  name: string;
+  nameHindi?: string;
+  category?: string;
+  barcode?: string;
+  unit: Product['unit'];
+  quantity: number;
+  unitPrice: number;
+  costPrice?: number;
+  taxRate: number;
+  discountPercent?: number;
+  saveToInventory?: boolean;
+  initialStock?: number;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -147,8 +163,15 @@ export interface LicenseHistoryRecord {
   isDeviceBound: boolean;
 }
 
+export type LicenseAccessMode =
+  | 'unactivated'
+  | 'public_trial'
+  | 'annual_license'
+  | 'creator_lifetime';
+
 export interface LicenseState {
   installationId: string;
+  accessMode: LicenseAccessMode;
   activeKey: string | null;
   activatedAt: string | null;
   expiresAt: string | null;
@@ -157,6 +180,9 @@ export interface LicenseState {
   usedKeys: string[];
   history: LicenseHistoryRecord[];
   lastVerifiedAt: string;
+  publicTrialUsed: boolean;
+  publicTrialStartedAt: string | null;
+  publicTrialExpiresAt: string | null;
 }
 
 export interface GeneratedKeyRecord {
@@ -182,6 +208,8 @@ export interface CreatorConfig {
 
 export type LicenseStatusType =
   | 'unactivated'
+  | 'creator_always_valid'
+  | 'public_trial_active'
   | 'active'
   | 'expiring_soon'
   | 'expired'
@@ -189,11 +217,26 @@ export type LicenseStatusType =
 
 export interface LicenseEvaluation {
   status: LicenseStatusType;
+  accessMode: LicenseAccessMode;
   isLockedByLicense: boolean;
+  isCreatorLifetime: boolean;
+  isPublicTrial: boolean;
   daysRemaining: number;
+  hoursRemaining: number;
   totalDays: number;
   progressPercent: number;
   expiresAt: string | null;
   activatedAt: string | null;
 }
 
+export type ColorThemeId = 'peacock' | 'maharaja' | 'ruby' | 'kesariya' | 'emerald';
+
+export interface ColorThemeMeta {
+  id: ColorThemeId;
+  name: string;
+  nameHindi: string;
+  description: string;
+  commandHex: string;
+  accentHex: string;
+  highlightHex: string;
+}

@@ -16,7 +16,12 @@ import {
   LogOut,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatLicenseKeyInput } from '../utils/license';
+import {
+  formatLicenseKeyInput,
+  PUBLIC_LOGIN_ID,
+  PUBLIC_LOGIN_PASSWORD,
+  PUBLIC_2DAY_LICENSE_KEY,
+} from '../utils/license';
 import { formatDate, formatDateTime } from '../utils/formatters';
 
 export const LicenseManager: React.FC = () => {
@@ -24,6 +29,9 @@ export const LicenseManager: React.FC = () => {
     licenseState,
     licenseEvaluation,
     activateLicenseKey,
+    enableCreatorLifetimeMode,
+    exitCreatorLifetimeMode,
+    openLoginGateScreen,
     generatedKeys,
     generateNewLicenseKey,
     deleteGeneratedKey,
@@ -33,6 +41,7 @@ export const LicenseManager: React.FC = () => {
     updateCreatorCredentials,
     simulateLicenseExpiry,
     simulateLicenseExpiringSoon,
+    simulatePublicTrialExpiry,
     settings,
   } = useApp();
 
@@ -222,10 +231,10 @@ export const LicenseManager: React.FC = () => {
       <div className="px-4 lg:px-6 py-4 bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-            Annual Software License & Creator Console
+            Software License, 2-Day Public Access & Creator Console
           </h2>
           <p className="text-xs text-neutral-500 mt-0.5">
-            1-Year subscription validity, annual key renewal, and restricted creator keygen console
+            2-Day Public Login, 1-Year Store Subscription, and Creator Always-Valid Keygen Console
           </p>
         </div>
 
@@ -264,17 +273,23 @@ export const LicenseManager: React.FC = () => {
           <>
             {/* Top Summary Section */}
             <div className="p-6 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-100 dark:border-neutral-800 pb-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-neutral-100 dark:border-neutral-800 pb-5">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-xs text-neutral-500">
-                    <span>{licenseState.planLabel}</span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                    <span className="font-medium text-neutral-700 dark:text-neutral-300">
+                      {licenseState.planLabel}
+                    </span>
                     <span>·</span>
                     <span>
-                      {licenseEvaluation.status === 'active'
-                        ? 'Active Subscription'
+                      {licenseEvaluation.isCreatorLifetime
+                        ? 'Creator Lifetime Access (Always Valid)'
+                        : licenseEvaluation.isPublicTrial
+                        ? '2-Day Public Trial Active'
+                        : licenseEvaluation.status === 'active'
+                        ? 'Active Annual Subscription'
                         : licenseEvaluation.status === 'expiring_soon'
-                        ? 'Renewal Due Soon'
-                        : 'Renewal Required'}
+                        ? 'Annual Renewal Due Soon'
+                        : 'Activation / Renewal Required'}
                     </span>
                   </div>
                   <h3 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
@@ -282,36 +297,58 @@ export const LicenseManager: React.FC = () => {
                   </h3>
                   {licenseState.activeKey && (
                     <p className="text-xs font-mono tabular-nums text-neutral-500">
-                      Active Key: {licenseState.activeKey}
+                      Active Mode / Key: {licenseState.activeKey}
                     </p>
                   )}
                 </div>
 
-                {/* System Installation ID */}
-                <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
-                  <div>
-                    <div className="text-[11px] text-neutral-500">System Installation ID</div>
-                    <div className="text-sm font-bold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
-                      {licenseState.installationId}
+                {/* System Installation ID + Mode Switcher */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
+                    <div>
+                      <div className="text-[11px] text-neutral-500">System Installation ID</div>
+                      <div className="text-sm font-bold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
+                        {licenseState.installationId}
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleCopyInstallId}
+                      className="px-2.5 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedInstallId ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleCopyInstallId}
-                    className="px-2.5 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    {copiedInstallId ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Copied</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
-                      </>
-                    )}
-                  </button>
+
+                  {licenseEvaluation.isCreatorLifetime ? (
+                    <button
+                      type="button"
+                      onClick={exitCreatorLifetimeMode}
+                      className="px-3.5 py-2.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Exit Creator Mode</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={openLoginGateScreen}
+                      className="px-3.5 py-2.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>Switch Login / Mode</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -320,19 +357,31 @@ export const LicenseManager: React.FC = () => {
                 <div className="space-y-1">
                   <div className="text-xs text-neutral-500 flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5" />
-                    <span>Days Remaining</span>
+                    <span>Validity Remaining</span>
                   </div>
                   <div
                     className={`text-2xl font-bold font-mono tabular-nums ${
-                      licenseEvaluation.daysRemaining <= 30
+                      licenseEvaluation.isCreatorLifetime
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : licenseEvaluation.isPublicTrial
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : licenseEvaluation.daysRemaining <= 30
                         ? 'text-amber-600 dark:text-amber-400'
                         : 'text-emerald-600 dark:text-emerald-400'
                     }`}
                   >
-                    {licenseEvaluation.daysRemaining} Days
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Always Valid'
+                      : licenseEvaluation.isPublicTrial
+                      ? `${licenseEvaluation.hoursRemaining} Hours`
+                      : `${licenseEvaluation.daysRemaining} Days`}
                   </div>
                   <div className="text-xs text-neutral-500">
-                    Out of {licenseEvaluation.totalDays} days cycle
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Unlimited lifetime creator validity'
+                      : licenseEvaluation.isPublicTrial
+                      ? `2-Day Public License (${licenseEvaluation.daysRemaining}d / 48h window)`
+                      : `Out of ${licenseEvaluation.totalDays} days cycle`}
                   </div>
                 </div>
 
@@ -342,36 +391,130 @@ export const LicenseManager: React.FC = () => {
                     <span>Activated On</span>
                   </div>
                   <div className="text-lg font-semibold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
-                    {licenseState.activatedAt ? formatDate(licenseState.activatedAt) : '—'}
+                    {licenseState.activatedAt
+                      ? licenseEvaluation.isPublicTrial
+                        ? formatDateTime(licenseState.activatedAt)
+                        : formatDate(licenseState.activatedAt)
+                      : '—'}
                   </div>
-                  <div className="text-xs text-neutral-500">Last renewal timestamp</div>
+                  <div className="text-xs text-neutral-500">
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Creator lifetime session active'
+                      : 'Last activation timestamp'}
+                  </div>
                 </div>
 
                 <div className="space-y-1">
                   <div className="text-xs text-neutral-500 flex items-center gap-1.5">
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Valid Until (Annual Expiry)</span>
+                    <span>Valid Until (Expiry)</span>
                   </div>
                   <div className="text-lg font-semibold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
-                    {licenseState.expiresAt ? formatDate(licenseState.expiresAt) : '—'}
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Never Expires'
+                      : licenseState.expiresAt
+                      ? licenseEvaluation.isPublicTrial
+                        ? formatDateTime(licenseState.expiresAt)
+                        : formatDate(licenseState.expiresAt)
+                      : '—'}
                   </div>
-                  <div className="text-xs text-neutral-500">Requires new key after this date</div>
+                  <div className="text-xs text-neutral-500">
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Creator login never expires'
+                      : licenseEvaluation.isPublicTrial
+                      ? 'Locks automatically after 48 hours'
+                      : 'Requires new key after this date'}
+                  </div>
                 </div>
               </div>
 
               {/* Progress Bar */}
               <div className="space-y-1.5">
                 <div className="flex justify-between text-xs text-neutral-500">
-                  <span>Annual License Validity Progress</span>
-                  <span className="font-mono tabular-nums">{licenseEvaluation.progressPercent}%</span>
+                  <span>
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Creator Lifetime Access (Unlimited Time)'
+                      : licenseEvaluation.isPublicTrial
+                      ? '2-Day Public License Validity (48 Hours)'
+                      : 'Annual License Validity Progress'}
+                  </span>
+                  <span className="font-mono tabular-nums">
+                    {licenseEvaluation.isCreatorLifetime
+                      ? 'Always Valid · 100%'
+                      : `${licenseEvaluation.progressPercent}%`}
+                  </span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      licenseEvaluation.daysRemaining <= 30 ? 'bg-amber-500' : 'bg-emerald-500'
+                      licenseEvaluation.isCreatorLifetime
+                        ? 'bg-emerald-500'
+                        : licenseEvaluation.isPublicTrial || licenseEvaluation.daysRemaining <= 30
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
                     }`}
-                    style={{ width: `${licenseEvaluation.progressPercent}%` }}
+                    style={{
+                      width: `${
+                        licenseEvaluation.isCreatorLifetime ? 100 : licenseEvaluation.progressPercent
+                      }%`,
+                    }}
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* Public 2-Day Login & License Reference Card */}
+            <div className="p-6 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
+                    Public Login & 2-Day Public License (डेमो / ट्रायल एक्सेस)
+                  </h3>
+                  <p className="text-xs text-neutral-500 mt-0.5">
+                    ग्राहकों को 2 दिन (48 घंटे) का ट्रायल देने के लिए नीचे दिए गए Public Login और Public Key का उपयोग करें।
+                  </p>
+                </div>
+                <span className="text-xs font-mono tabular-nums text-neutral-600 dark:text-neutral-400">
+                  {licenseEvaluation.isPublicTrial
+                    ? `Active (${licenseEvaluation.hoursRemaining}h left)`
+                    : licenseState.publicTrialUsed
+                    ? 'Used on this device'
+                    : 'Available (48 Hours)'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
+                  <div className="text-neutral-500 mb-1">Public Login ID</div>
+                  <div className="font-mono font-semibold text-neutral-900 dark:text-neutral-100">
+                    {PUBLIC_LOGIN_ID}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800">
+                  <div className="text-neutral-500 mb-1">Public Password</div>
+                  <div className="font-mono font-semibold text-neutral-900 dark:text-neutral-100">
+                    {PUBLIC_LOGIN_PASSWORD}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-neutral-500 mb-1">2-Day Public License Key</div>
+                    <div className="font-mono font-semibold text-emerald-700 dark:text-emerald-400 truncate">
+                      {PUBLIC_2DAY_LICENSE_KEY}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyKey(PUBLIC_2DAY_LICENSE_KEY, 'public-demo-key')}
+                    className="px-2 py-1 rounded-md border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 shrink-0 cursor-pointer"
+                    title="Copy Public License Key"
+                  >
+                    {copiedKeyId === 'public-demo-key' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
@@ -577,18 +720,49 @@ export const LicenseManager: React.FC = () => {
         ) : (
           /* Unlocked Creator Key Generator Studio */
           <div className="space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-xs text-neutral-500">
-                Creator Console Authenticated · Generate signed annual keys for any store
+            <div className="p-4 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                  Creator Console Authenticated ·{' '}
+                  {licenseEvaluation.isCreatorLifetime
+                    ? 'Creator Always-Valid Mode Active (Never Expires)'
+                    : 'Key Generator Session Open'}
+                </div>
+                <div className="text-[11px] text-neutral-500">
+                  {licenseEvaluation.isCreatorLifetime
+                    ? 'यह डिवाइस अभी Creator Lifetime Mode (Always Valid) में है — इसकी वैधता कभी समाप्त नहीं होगी।'
+                    : 'यदि यह आपका स्वयं का PC है, तो इसे Always-Valid (Unlimited) मोड पर सेट कर सकते हैं।'}
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={handleCreatorLogout}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Logout Creator Console</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {licenseEvaluation.isCreatorLifetime ? (
+                  <button
+                    type="button"
+                    onClick={exitCreatorLifetimeMode}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/30 cursor-pointer"
+                  >
+                    <span>Switch Device to Customer Mode</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={enableCreatorLifetimeMode}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Set Creator Always-Valid (Lifetime)</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleCreatorLogout}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Lock Console</span>
+                </button>
+              </div>
             </div>
 
             {/* Key Generator Form */}
@@ -1080,15 +1254,24 @@ export const LicenseManager: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-500" />
                       <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-                        Test Annual Expiry & Renewal Gate
+                        Test Public 2-Day & Annual Expiry Gate
                       </h3>
                     </div>
                     <p className="text-xs text-neutral-500 leading-relaxed">
-                      1 साल पूरा होने पर लॉक स्क्रीन और नई लाइसेंस की की जांच करने के लिए:
+                      2-दिन के पब्लिक लाइसेंस या 1-साल के लाइसेंस की समाप्ति (Lock Screen) जांचने के लिए:
                     </p>
                   </div>
 
                   <div className="space-y-2.5">
+                    <button
+                      type="button"
+                      onClick={simulatePublicTrialExpiry}
+                      className="w-full px-4 py-2.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer text-left flex items-center justify-between"
+                    >
+                      <span>Simulate 2-Day Public License Expiry (48h Elapsed)</span>
+                      <ArrowRightIcon />
+                    </button>
+
                     <button
                       type="button"
                       onClick={simulateLicenseExpiringSoon}

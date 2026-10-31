@@ -2,6 +2,9 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import {
   Product,
   Invoice,
+  InvoiceItem,
+  InvoiceItemInput,
+  PaymentMethod,
   CartItem,
   User,
   NotificationItem,
@@ -13,10 +16,12 @@ import {
   LicenseEvaluation,
   GeneratedKeyRecord,
   CreatorConfig,
+  ColorThemeId,
 } from '../types';
 import { StorageService } from '../utils/storage';
 import { generateInvoiceNumber } from '../utils/formatters';
 import { soundManager } from '../utils/audio';
+import { COLOR_THEMES, DEFAULT_COLOR_THEME } from '../utils/themes';
 import {
   LicenseStorage,
   evaluateLicenseStatus,
@@ -24,6 +29,12 @@ import {
   applyLicenseActivation,
   createSignedLicenseKey,
   computeCreatorCredentialHash,
+  PUBLIC_2DAY_LICENSE_KEY,
+  canonicalizeLicenseKey,
+  verifyPublicLoginCredentials,
+  activatePublicTrialState,
+  activateCreatorLifetimeState,
+  exitCreatorLifetimeState,
 } from '../utils/license';
 
 interface AppContextType {
@@ -42,6 +53,8 @@ interface AppContextType {
   selectCustomerForPOS: (customer: Customer) => void;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
+  colorTheme: ColorThemeId;
+  setColorTheme: (theme: ColorThemeId) => void;
   isOffline: boolean;
   isLocked: boolean;
   setIsLocked: (locked: boolean) => void;
@@ -64,6 +77,7 @@ interface AppContextType {
   findCustomerByPhone: (phone: string) => Customer | undefined;
   // Cart & POS actions
   addToCart: (product: Product, quantity?: number) => void;
+  addCustomOrCatalogItemToCart: (input: InvoiceItemInput) => Product;
   removeFromCart: (productId: string) => void;
   updateCartQuantity: (productId: string, quantity: number) => void;
   updateCartDiscount: (productId: string, discountPercent: number) => void;
@@ -82,6 +96,18 @@ interface AppContextType {
     discountPercent?: number;
     notes?: string;
   }) => Invoice;
+  addItemToInvoice: (invoiceId: string, input: InvoiceItemInput) => Invoice | null;
+  updateInvoiceItemQuantity: (invoiceId: string, itemIndex: number, newQuantity: number) => Invoice | null;
+  createDirectInvoice: (params: {
+    items: InvoiceItemInput[];
+    customerName?: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    customerGstin?: string;
+    paymentMethod: PaymentMethod;
+    discountPercent?: number;
+    notes?: string;
+  }) => Invoice;
   cancelOrRefundInvoice: (invoiceId: string) => void;
   // Settings & notifications
   updateSettings: (newSettings: StoreSettings) => void;
@@ -97,10 +123,22 @@ interface AppContextType {
   clearPendingEntryAction: () => void;
   triggerQuickEntry: (action: QuickEntryAction) => void;
   getDirectEntryUrl: (action: QuickEntryAction) => string;
-  // Annual License & Creator Keygen System
+  // Annual License, 2-Day Public Login & Creator Always-Valid System
   licenseState: LicenseState;
   licenseEvaluation: LicenseEvaluation;
   activateLicenseKey: (rawKey: string) => { ok: boolean; message: string };
+  loginWithPublicLicense: (
+    loginId: string,
+    password: string,
+    licenseKey: string
+  ) => { ok: boolean; message: string };
+  loginAsCreatorLifetime: (
+    creatorId: string,
+    password: string
+  ) => { ok: boolean; message: string };
+  enableCreatorLifetimeMode: () => void;
+  exitCreatorLifetimeMode: () => void;
+  openLoginGateScreen: () => void;
   generatedKeys: GeneratedKeyRecord[];
   generateNewLicenseKey: (params: {
     clientName: string;
@@ -123,6 +161,7 @@ interface AppContextType {
   }) => { ok: boolean; message: string };
   simulateLicenseExpiry: () => void;
   simulateLicenseExpiringSoon: () => void;
+  simulatePublicTrialExpiry: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -241,6 +280,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isDarkMode]);
 
   const toggleDarkMode = () => setIsDarkMode(prev => !prev);
+
+  // Signature Color Theme state (Default: Royal Peacock & Saffron Gold)
+  const [colorTheme, setColorThemeState] = useState<ColorThemeId>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('vyaparpos_color_theme_v2') as ColorThemeId | null;
+      if (saved && COLOR_THEMES.some(t => t.id === saved)) {
+        return saved;
+      }
+    }
+    return DEFAULT_COLOR_THEME;
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-color-theme', colorTheme);
+    try {
+      localStorage.setItem('vyaparpos_color_theme_v2', colorTheme);
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [colorTheme]);
+
+  const setColorTheme = useCallback((theme: ColorThemeId) => {
+    setColorThemeState(theme);
+  }, []);
 
   // Sync sound manager setting
   useEffect(() => {
@@ -476,6 +539,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const addCustomOrCatalogItemToCart = (input: InvoiceItemInput): Product => {
+    soundManager.playScanBeep();
+    const qty = Math.max(1, Number(input.quantity) || 1);
+    const rate = Math.max(0, Number(input.unitPrice) || 0);
+    const tax = Math.max(0, Number(input.taxRate) || 0);
+    const disc = Math.max(0, Math.min(100, Number(input.discountPercent) || 0));
+
+    let targetProduct: Product | undefined = input.productId
+      ? products.find(p => p.id === input.productId)
+      : undefined;
+
+    if (!targetProduct) {
+      if (input.saveToInventory) {
+        const openingStock = Math.max(qty, Number(input.initialStock) || 50);
+        targetProduct = addProduct({
+          name: input.name.trim(),
+          nameHindi: input.nameHindi?.trim() || '',
+          category: input.category?.trim() || 'General',
+          barcode: input.barcode?.trim() || `${Math.floor(10000000 + Math.random() * 90000000)}`,
+          costPrice: input.costPrice !== undefined ? Number(input.costPrice) : Math.round(rate * 0.85),
+          sellingPrice: rate,
+          stock: openingStock,
+          minStockAlert: 5,
+          unit: input.unit || 'pcs',
+          taxRate: tax,
+        });
+      } else {
+        targetProduct = {
+          id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          barcode: input.barcode?.trim() || '',
+          name: input.name.trim(),
+          nameHindi: input.nameHindi?.trim() || '',
+          category: input.category?.trim() || 'Custom Item',
+          costPrice: rate,
+          sellingPrice: rate,
+          stock: 99999,
+          minStockAlert: 0,
+          unit: input.unit || 'pcs',
+          taxRate: tax,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
+
+    const resolvedProd = targetProduct;
+    setCart(prev => {
+      const existing = prev.find(
+        item =>
+          item.product.id === resolvedProd.id &&
+          item.unitPrice === rate &&
+          item.taxRate === tax
+      );
+      if (existing) {
+        return prev.map(item =>
+          item.product.id === resolvedProd.id &&
+          item.unitPrice === rate &&
+          item.taxRate === tax
+            ? { ...item, quantity: item.quantity + qty, discountPercent: disc }
+            : item
+        );
+      }
+      return [
+        ...prev,
+        {
+          product: resolvedProd,
+          quantity: qty,
+          unitPrice: rate,
+          taxRate: tax,
+          discountPercent: disc,
+        },
+      ];
+    });
+
+    return resolvedProd;
+  };
+
   const removeFromCart = (productId: string) => {
     setCart(prev => prev.filter(item => item.product.id !== productId));
   };
@@ -637,9 +776,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isOfflineCreated: isOffline,
     };
 
-    // 1. Deduct stock in real-time
+    // 1. Deduct stock in real-time (skip ad-hoc custom items)
     cart.forEach(ci => {
-      adjustStock(ci.product.id, -ci.quantity, `Sold in ${newInvoice.invoiceNumber}`);
+      if (!ci.product.id.startsWith('custom-')) {
+        adjustStock(ci.product.id, -ci.quantity, `Sold in ${newInvoice.invoiceNumber}`);
+      }
     });
 
     // 2. Add Invoice
@@ -663,14 +804,348 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newInvoice;
   };
 
+  // Recalculate invoice totals helper
+  const recalculateInvoiceWithItems = (prevInv: Invoice, updatedItems: InvoiceItem[]): Invoice => {
+    const prevItemsDiscountSum = prevInv.items.reduce((s, it) => s + it.discountAmount, 0);
+    const extraBillDiscount = Math.max(0, prevInv.discountTotal - prevItemsDiscountSum);
+
+    const subtotal = updatedItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
+    const itemDiscounts = updatedItems.reduce((sum, it) => sum + it.discountAmount, 0);
+    const discountTotal = Math.min(subtotal, itemDiscounts + extraBillDiscount);
+    const taxTotal = updatedItems.reduce((sum, it) => sum + it.taxAmount, 0);
+    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+
+    const amountTendered =
+      prevInv.paymentMethod === 'cash'
+        ? Math.max(prevInv.amountTendered || 0, grandTotal)
+        : grandTotal;
+    const changeDue =
+      prevInv.paymentMethod === 'cash'
+        ? Math.max(0, amountTendered - grandTotal)
+        : 0;
+
+    return {
+      ...prevInv,
+      items: updatedItems,
+      subtotal,
+      taxTotal,
+      discountTotal,
+      grandTotal,
+      amountTendered,
+      changeDue,
+    };
+  };
+
+  // Add an item (catalog or custom) directly to an existing active invoice
+  const addItemToInvoice = (invoiceId: string, input: InvoiceItemInput): Invoice | null => {
+    const existingInv = invoices.find(i => i.id === invoiceId);
+    if (!existingInv || existingInv.status !== 'paid') return null;
+
+    const qty = Math.max(1, Number(input.quantity) || 1);
+    const rate = Math.max(0, Number(input.unitPrice) || 0);
+    const taxRate = Math.max(0, Number(input.taxRate) || 0);
+    const discPct = Math.max(0, Math.min(100, Number(input.discountPercent) || 0));
+
+    let resolvedProductId = input.productId || '';
+    let resolvedBarcode = input.barcode?.trim() || '';
+    const resolvedUnit = input.unit || 'pcs';
+    const resolvedName = input.name.trim();
+
+    const matchedCatalogProd = resolvedProductId
+      ? products.find(p => p.id === resolvedProductId)
+      : undefined;
+
+    if (matchedCatalogProd) {
+      resolvedBarcode = matchedCatalogProd.barcode;
+      adjustStock(matchedCatalogProd.id, -qty, `Added to ${existingInv.invoiceNumber}`);
+    } else if (input.saveToInventory) {
+      const openingStock = Math.max(qty, Number(input.initialStock) || 50);
+      const newProd = addProduct({
+        name: resolvedName,
+        nameHindi: input.nameHindi?.trim() || '',
+        category: input.category?.trim() || 'General',
+        barcode: resolvedBarcode || `${Math.floor(10000000 + Math.random() * 90000000)}`,
+        costPrice: input.costPrice !== undefined ? Number(input.costPrice) : Math.round(rate * 0.85),
+        sellingPrice: rate,
+        stock: Math.max(0, openingStock - qty),
+        minStockAlert: 5,
+        unit: resolvedUnit,
+        taxRate,
+      });
+      resolvedProductId = newProd.id;
+      resolvedBarcode = newProd.barcode;
+    } else {
+      resolvedProductId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    }
+
+    const buildLineItem = (lineQty: number, existingDiscountAmt?: number): InvoiceItem => {
+      const gross = lineQty * rate;
+      const itemDiscount =
+        existingDiscountAmt !== undefined
+          ? existingDiscountAmt + (qty * rate * discPct) / 100
+          : (gross * discPct) / 100;
+      const netAfterDiscount = Math.max(0, gross - itemDiscount);
+      const taxAmount = Math.round((netAfterDiscount * taxRate) / 100);
+      const total = netAfterDiscount + taxAmount;
+      return {
+        productId: resolvedProductId,
+        name: resolvedName,
+        barcode: resolvedBarcode,
+        unit: resolvedUnit,
+        quantity: lineQty,
+        unitPrice: rate,
+        taxRate,
+        taxAmount,
+        discountAmount: itemDiscount,
+        total,
+      };
+    };
+
+    const existingIdx = existingInv.items.findIndex(
+      it =>
+        !resolvedProductId.startsWith('custom-') &&
+        it.productId === resolvedProductId &&
+        it.unitPrice === rate &&
+        it.taxRate === taxRate
+    );
+
+    const updatedItems =
+      existingIdx >= 0
+        ? existingInv.items.map((it, idx) =>
+            idx === existingIdx
+              ? buildLineItem(it.quantity + qty, it.discountAmount)
+              : it
+          )
+        : [...existingInv.items, buildLineItem(qty)];
+
+    const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
+
+    setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    soundManager.playScanBeep();
+    addNotification({
+      title: `Item Added to ${existingInv.invoiceNumber}`,
+      message: `${resolvedName} (×${qty}) added. Updated Bill Total: ₹${updatedInvoice.grandTotal.toLocaleString('en-IN')}`,
+      type: 'sale',
+      relatedId: existingInv.id,
+    });
+
+    return updatedInvoice;
+  };
+
+  // Update quantity or remove line item inside an existing active invoice
+  const updateInvoiceItemQuantity = (
+    invoiceId: string,
+    itemIndex: number,
+    newQuantity: number
+  ): Invoice | null => {
+    const existingInv = invoices.find(i => i.id === invoiceId);
+    if (!existingInv || existingInv.status !== 'paid') return null;
+    const targetItem = existingInv.items[itemIndex];
+    if (!targetItem) return null;
+
+    if (newQuantity <= 0 && existingInv.items.length <= 1) {
+      return existingInv;
+    }
+
+    const delta = Math.max(0, newQuantity) - targetItem.quantity;
+    if (targetItem.productId && !targetItem.productId.startsWith('custom-') && delta !== 0) {
+      adjustStock(
+        targetItem.productId,
+        -delta,
+        `Updated in ${existingInv.invoiceNumber}`
+      );
+    }
+
+    let updatedItems: InvoiceItem[];
+    if (newQuantity <= 0) {
+      updatedItems = existingInv.items.filter((_, idx) => idx !== itemIndex);
+    } else {
+      const perUnitDiscount =
+        targetItem.quantity > 0 ? targetItem.discountAmount / targetItem.quantity : 0;
+      const gross = newQuantity * targetItem.unitPrice;
+      const discountAmount = Math.min(gross, perUnitDiscount * newQuantity);
+      const net = gross - discountAmount;
+      const taxAmount = Math.round((net * targetItem.taxRate) / 100);
+      const total = net + taxAmount;
+      updatedItems = existingInv.items.map((it, idx) =>
+        idx === itemIndex
+          ? {
+              ...it,
+              quantity: newQuantity,
+              discountAmount,
+              taxAmount,
+              total,
+            }
+          : it
+      );
+    }
+
+    const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
+    setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    return updatedInvoice;
+  };
+
+  // Create a complete invoice directly from the Invoices module
+  const createDirectInvoice = (params: {
+    items: InvoiceItemInput[];
+    customerName?: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    customerGstin?: string;
+    paymentMethod: PaymentMethod;
+    discountPercent?: number;
+    notes?: string;
+  }): Invoice => {
+    if (!params.items.length) {
+      throw new Error('At least one item is required to create an invoice.');
+    }
+
+    const invoiceNumber = generateInvoiceNumber(invoices.length);
+
+    const builtItems: InvoiceItem[] = params.items.map(input => {
+      const qty = Math.max(1, Number(input.quantity) || 1);
+      const rate = Math.max(0, Number(input.unitPrice) || 0);
+      const taxRate = Math.max(0, Number(input.taxRate) || 0);
+      const discPct = Math.max(0, Math.min(100, Number(input.discountPercent) || 0));
+
+      let resolvedProductId = input.productId || '';
+      let resolvedBarcode = input.barcode?.trim() || '';
+      const resolvedUnit = input.unit || 'pcs';
+      const resolvedName = input.name.trim();
+
+      const matchedCatalogProd = resolvedProductId
+        ? products.find(p => p.id === resolvedProductId)
+        : undefined;
+
+      if (matchedCatalogProd) {
+        resolvedBarcode = matchedCatalogProd.barcode;
+        adjustStock(matchedCatalogProd.id, -qty, `Sold in ${invoiceNumber}`);
+      } else if (input.saveToInventory) {
+        const openingStock = Math.max(qty, Number(input.initialStock) || 50);
+        const newProd = addProduct({
+          name: resolvedName,
+          nameHindi: input.nameHindi?.trim() || '',
+          category: input.category?.trim() || 'General',
+          barcode: resolvedBarcode || `${Math.floor(10000000 + Math.random() * 90000000)}`,
+          costPrice: input.costPrice !== undefined ? Number(input.costPrice) : Math.round(rate * 0.85),
+          sellingPrice: rate,
+          stock: Math.max(0, openingStock - qty),
+          minStockAlert: 5,
+          unit: resolvedUnit,
+          taxRate,
+        });
+        resolvedProductId = newProd.id;
+        resolvedBarcode = newProd.barcode;
+      } else {
+        resolvedProductId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      }
+
+      const gross = qty * rate;
+      const discountAmount = (gross * discPct) / 100;
+      const net = gross - discountAmount;
+      const taxAmount = Math.round((net * taxRate) / 100);
+      const total = net + taxAmount;
+
+      return {
+        productId: resolvedProductId,
+        name: resolvedName,
+        barcode: resolvedBarcode,
+        unit: resolvedUnit,
+        quantity: qty,
+        unitPrice: rate,
+        taxRate,
+        taxAmount,
+        discountAmount,
+        total,
+      };
+    });
+
+    const subtotal = builtItems.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
+    const itemDiscounts = builtItems.reduce((s, it) => s + it.discountAmount, 0);
+    const overallDiscount = (subtotal * (params.discountPercent || 0)) / 100;
+    const discountTotal = itemDiscounts + overallDiscount;
+    const taxTotal = builtItems.reduce((s, it) => s + it.taxAmount, 0);
+    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+
+    const trimmedName = params.customerName?.trim() || '';
+    const trimmedPhone = params.customerPhone?.trim() || '';
+    let assignedCustomerId: string | undefined;
+
+    if (trimmedPhone || (trimmedName && trimmedName !== 'Walk-in Customer')) {
+      const cleanPhone = trimmedPhone.replace(/\D/g, '');
+      const existingCust = cleanPhone
+        ? customers.find(c => c.phone.replace(/\D/g, '') === cleanPhone)
+        : undefined;
+      const pointsEarned = Math.floor(grandTotal / 100);
+
+      if (existingCust) {
+        assignedCustomerId = existingCust.id;
+        updateCustomer(existingCust.id, {
+          name: trimmedName || existingCust.name,
+          address: params.customerAddress?.trim() || existingCust.address,
+          gstin: params.customerGstin?.trim() || existingCust.gstin,
+          loyaltyPoints: (existingCust.loyaltyPoints || 0) + pointsEarned,
+        });
+      } else {
+        const newCust = addCustomer({
+          name: trimmedName || 'Customer',
+          phone: trimmedPhone,
+          email: '',
+          address: params.customerAddress?.trim() || '',
+          gstin: params.customerGstin?.trim() || '',
+          notes: params.notes?.trim() || '',
+          loyaltyPoints: pointsEarned,
+        });
+        assignedCustomerId = newCust.id;
+      }
+    }
+
+    const newInvoice: Invoice = {
+      id: `inv-${Date.now()}`,
+      invoiceNumber,
+      createdAt: new Date().toISOString(),
+      cashierId: activeUser.id,
+      cashierName: activeUser.name,
+      customerId: assignedCustomerId,
+      customerName: trimmedName || 'Walk-in Customer',
+      customerPhone: trimmedPhone,
+      customerAddress: params.customerAddress?.trim() || '',
+      customerGstin: params.customerGstin?.trim() || '',
+      items: builtItems,
+      subtotal,
+      taxTotal,
+      discountTotal,
+      grandTotal,
+      paymentMethod: params.paymentMethod,
+      amountTendered: grandTotal,
+      changeDue: 0,
+      status: 'paid',
+      notes: params.notes?.trim() || '',
+      isOfflineCreated: isOffline,
+    };
+
+    setInvoices(prev => [newInvoice, ...prev]);
+    soundManager.playSuccessChime();
+    addNotification({
+      title: `Invoice Created (${newInvoice.paymentMethod.toUpperCase()})`,
+      message: `${newInvoice.invoiceNumber} generated for ₹${grandTotal.toLocaleString('en-IN')} (${builtItems.length} items).`,
+      type: 'sale',
+      relatedId: newInvoice.id,
+    });
+
+    return newInvoice;
+  };
+
   // Cancel or Refund Invoice
   const cancelOrRefundInvoice = (invoiceId: string) => {
     const inv = invoices.find(i => i.id === invoiceId);
     if (!inv || inv.status === 'refunded') return;
 
-    // Restore stock
+    // Restore stock for catalog items
     inv.items.forEach(it => {
-      adjustStock(it.productId, it.quantity, `Restored from Refund ${inv.invoiceNumber}`);
+      if (it.productId && !it.productId.startsWith('custom-')) {
+        adjustStock(it.productId, it.quantity, `Restored from Refund ${inv.invoiceNumber}`);
+      }
     });
 
     setInvoices(prev =>
@@ -836,6 +1311,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const licenseEvaluation = evaluateLicenseStatus(licenseState);
 
   const activateLicenseKey = (rawKey: string): { ok: boolean; message: string } => {
+    if (canonicalizeLicenseKey(rawKey) === PUBLIC_2DAY_LICENSE_KEY) {
+      const pubRes = activatePublicTrialState(licenseState, rawKey, activeUser.name);
+      if (!pubRes.ok || !pubRes.updatedState) {
+        soundManager.playAlertTone();
+        return { ok: false, message: pubRes.message };
+      }
+      setLicenseState(pubRes.updatedState);
+      soundManager.playSuccessChime();
+      addNotification({
+        title: '2-Day Public License Activated',
+        message: pubRes.message,
+        type: 'system',
+      });
+      return { ok: true, message: pubRes.message };
+    }
+
     const result = verifyLicenseKey(rawKey, licenseState.installationId, licenseState.usedKeys);
     if (!result.valid || !result.canonicalKey || !result.durationDays || !result.planLabel) {
       soundManager.playAlertTone();
@@ -872,6 +1363,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updated.expiresAt!
       ).toLocaleDateString('en-IN')} तक (${result.durationDays} दिन)।`,
     };
+  };
+
+  const loginWithPublicLicense = (
+    loginId: string,
+    password: string,
+    licenseKey: string
+  ): { ok: boolean; message: string } => {
+    if (!verifyPublicLoginCredentials(loginId, password)) {
+      soundManager.playAlertTone();
+      return {
+        ok: false,
+        message: 'अमान्य पब्लिक लॉगिन ID या पासवर्ड! कृपया सही Public ID और Password दर्ज करें।',
+      };
+    }
+
+    const pubRes = activatePublicTrialState(licenseState, licenseKey, 'Public User');
+    if (!pubRes.ok || !pubRes.updatedState) {
+      soundManager.playAlertTone();
+      return {
+        ok: false,
+        message: pubRes.message,
+      };
+    }
+
+    setLicenseState(pubRes.updatedState);
+    soundManager.playSuccessChime();
+    addNotification({
+      title: 'Public Login Active (2 Days)',
+      message: pubRes.message,
+      type: 'system',
+    });
+    return { ok: true, message: pubRes.message };
   };
 
   const generateNewLicenseKey = (params: {
@@ -1044,14 +1567,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
-  // Simulation helpers for testing 1-year expiry & renewal gate immediately
+  const loginAsCreatorLifetime = (
+    creatorId: string,
+    password: string
+  ): { ok: boolean; message: string } => {
+    const res = verifyCreatorCredentials(creatorId, password);
+    if (!res.ok) {
+      return {
+        ok: false,
+        message: res.error || 'अमान्य क्रिएटर ID या पासवर्ड!',
+      };
+    }
+
+    setLicenseState(prev => activateCreatorLifetimeState(prev));
+    addNotification({
+      title: 'Creator Always-Valid Mode Active',
+      message: 'Creator authenticated. Software validity is set to Always Valid (Unlimited).',
+      type: 'system',
+    });
+    return {
+      ok: true,
+      message: 'क्रिएटर लॉगिन सफल! आपके लिए सॉफ्टवेयर हमेशा (Always Valid) अनलॉक है।',
+    };
+  };
+
+  const enableCreatorLifetimeMode = () => {
+    setLicenseState(prev => activateCreatorLifetimeState(prev));
+    soundManager.playSuccessChime();
+  };
+
+  const exitCreatorLifetimeMode = () => {
+    setLicenseState(prev => exitCreatorLifetimeState(prev));
+  };
+
+  const openLoginGateScreen = () => {
+    setLicenseState(prev => ({
+      ...prev,
+      accessMode: 'unactivated',
+    }));
+  };
+
+  // Simulation helpers for testing 1-year expiry, 2-day public expiry & renewal gate immediately
   const simulateLicenseExpiry = () => {
     const now = Date.now();
     const expiredIso = new Date(now - 2 * 60 * 60 * 1000).toISOString();
     const pastStartIso = new Date(now - 365 * 24 * 60 * 60 * 1000).toISOString();
     setLicenseState(prev => ({
       ...prev,
-      activeKey: prev.activeKey || 'VYPR-DEMO-EXPR-TEST-0000-YEAR',
+      accessMode: 'annual_license',
+      activeKey:
+        prev.activeKey && prev.activeKey !== PUBLIC_2DAY_LICENSE_KEY
+          ? prev.activeKey
+          : 'VYPR-DEMO-EXPR-TEST-0000-YEAR',
       activatedAt: prev.activatedAt || pastStartIso,
       expiresAt: expiredIso,
       lastVerifiedAt: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
@@ -1064,11 +1631,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const startIso = new Date(now - 358 * 24 * 60 * 60 * 1000).toISOString();
     setLicenseState(prev => ({
       ...prev,
-      activeKey: prev.activeKey || 'VYPR-SOON-EXPR-TEST-0007-DAYS',
+      accessMode: 'annual_license',
+      activeKey:
+        prev.activeKey && prev.activeKey !== PUBLIC_2DAY_LICENSE_KEY
+          ? prev.activeKey
+          : 'VYPR-SOON-EXPR-TEST-0007-DAYS',
       activatedAt: prev.activatedAt || startIso,
       expiresAt: inSevenDaysIso,
       durationDays: 365,
       lastVerifiedAt: new Date(now).toISOString(),
+    }));
+  };
+
+  const simulatePublicTrialExpiry = () => {
+    const now = Date.now();
+    const expiredIso = new Date(now - 60 * 60 * 1000).toISOString();
+    const startIso = new Date(now - 49 * 60 * 60 * 1000).toISOString();
+    setLicenseState(prev => ({
+      ...prev,
+      accessMode: 'public_trial',
+      activeKey: PUBLIC_2DAY_LICENSE_KEY,
+      activatedAt: startIso,
+      expiresAt: expiredIso,
+      durationDays: 2,
+      planLabel: '2-Day Public License',
+      publicTrialUsed: true,
+      publicTrialStartedAt: startIso,
+      publicTrialExpiresAt: expiredIso,
+      lastVerifiedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
     }));
   };
 
@@ -1090,6 +1680,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectCustomerForPOS,
         isDarkMode,
         toggleDarkMode,
+        colorTheme,
+        setColorTheme,
         isOffline,
         isLocked,
         setIsLocked,
@@ -1109,11 +1701,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteCustomer,
         findCustomerByPhone,
         addToCart,
+        addCustomOrCatalogItemToCart,
         removeFromCart,
         updateCartQuantity,
         updateCartDiscount,
         clearCart,
         checkout,
+        addItemToInvoice,
+        updateInvoiceItemQuantity,
+        createDirectInvoice,
         cancelOrRefundInvoice,
         updateSettings,
         markNotificationRead,
@@ -1130,6 +1726,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         licenseState,
         licenseEvaluation,
         activateLicenseKey,
+        loginWithPublicLicense,
+        loginAsCreatorLifetime,
+        enableCreatorLifetimeMode,
+        exitCreatorLifetimeMode,
+        openLoginGateScreen,
         generatedKeys,
         generateNewLicenseKey,
         deleteGeneratedKey,
@@ -1139,6 +1740,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateCreatorCredentials,
         simulateLicenseExpiry,
         simulateLicenseExpiringSoon,
+        simulatePublicTrialExpiry,
       }}
     >
       {children}
