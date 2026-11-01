@@ -82,7 +82,13 @@ export function buildWhatsAppInvoiceText(invoice: Invoice, settings: StoreSettin
   lines.push(`--------------------------------`);
   lines.push(`Taxable Subtotal: ₹${invoice.subtotal.toFixed(2)}`);
   if (invoice.discountTotal > 0) {
-    lines.push(`Discount: -₹${invoice.discountTotal.toFixed(2)}`);
+    const discSuffix =
+      invoice.billDiscountMode === 'percent' && invoice.billDiscountValue
+        ? ` (${invoice.billDiscountValue}%)`
+        : invoice.billDiscountMode === 'amount' && invoice.billDiscountValue
+        ? ` (Flat ₹${invoice.billDiscountValue})`
+        : '';
+    lines.push(`Discount${discSuffix}: -₹${invoice.discountTotal.toFixed(2)}`);
   }
   if (invoice.taxTotal > 0) {
     lines.push(`GST Total: ₹${invoice.taxTotal.toFixed(2)}`);

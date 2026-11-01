@@ -30,7 +30,7 @@ import {
   Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Product, PaymentMethod, Invoice, InvoiceItem, Customer } from '../types';
+import { Product, PaymentMethod, Invoice, InvoiceItem, Customer, DiscountMode } from '../types';
 import { formatCurrency } from '../utils/formatters';
 import {
   calculateLineGst,
@@ -100,12 +100,16 @@ export const POSBilling: React.FC = () => {
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [cashTendered, setCashTendered] = useState<number | ''>('');
-  const [billDiscountPercent, setBillDiscountPercent] = useState<number>(0);
+  const [billDiscountMode, setBillDiscountMode] = useState<DiscountMode>('percent');
+  const [billDiscountValue, setBillDiscountValue] = useState<number>(0);
+  const [customDiscountText, setCustomDiscountText] = useState<string>('');
+  const [isCustomDiscountActive, setIsCustomDiscountActive] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const customerInputRef = useRef<HTMLDivElement | null>(null);
+  const customDiscountInputRef = useRef<HTMLInputElement | null>(null);
 
   // Sync selectedPosCustomer from AppContext (e.g. if navigated from Customers tab)
   useEffect(() => {
@@ -244,10 +248,31 @@ export const POSBilling: React.FC = () => {
     return roundCurrency(cartComputedItems.reduce((sum, it) => sum + it.taxAmount, 0));
   }, [cartComputedItems]);
 
+  const maxBillDiscountable = useMemo(() => {
+    return Math.max(0, roundCurrency(cartSubtotal + cartTaxTotal - cartItemDiscounts));
+  }, [cartSubtotal, cartTaxTotal, cartItemDiscounts]);
+
+  const roundOffDiscountSuggestion = useMemo(() => {
+    if (maxBillDiscountable <= 0) return 0;
+    const paise = roundCurrency(maxBillDiscountable - Math.floor(maxBillDiscountable));
+    if (paise > 0) return paise;
+    const unitRupees = roundCurrency(maxBillDiscountable % 10);
+    if (maxBillDiscountable > 20 && unitRupees > 0 && unitRupees <= 9) return unitRupees;
+    return 0;
+  }, [maxBillDiscountable]);
+
+  const overallBillDiscount = useMemo(() => {
+    if (billDiscountValue <= 0 || maxBillDiscountable <= 0) return 0;
+    if (billDiscountMode === 'amount') {
+      return roundCurrency(Math.min(maxBillDiscountable, Math.max(0, billDiscountValue)));
+    }
+    const clampedPct = Math.max(0, Math.min(100, billDiscountValue));
+    return roundCurrency(Math.min(maxBillDiscountable, (cartSubtotal * clampedPct) / 100));
+  }, [billDiscountMode, billDiscountValue, cartSubtotal, maxBillDiscountable]);
+
   const discountAmount = useMemo(() => {
-    const overall = roundCurrency((cartSubtotal * billDiscountPercent) / 100);
-    return roundCurrency(cartItemDiscounts + overall);
-  }, [cartSubtotal, billDiscountPercent, cartItemDiscounts]);
+    return roundCurrency(cartItemDiscounts + overallBillDiscount);
+  }, [cartItemDiscounts, overallBillDiscount]);
 
   const grandTotal = useMemo(() => {
     return roundCurrency(Math.max(0, cartSubtotal + cartTaxTotal - discountAmount));
@@ -294,7 +319,8 @@ export const POSBilling: React.FC = () => {
     customerAddress,
     customerGstin,
     customerNotes,
-    billDiscountPercent,
+    billDiscountMode,
+    billDiscountValue,
     selectedCustomer,
     invoices,
   ]);
@@ -335,6 +361,8 @@ export const POSBilling: React.FC = () => {
       subtotal: cartSubtotal,
       taxTotal: cartTaxTotal,
       discountTotal: discountAmount,
+      billDiscountMode: billDiscountValue > 0 ? billDiscountMode : undefined,
+      billDiscountValue: billDiscountValue > 0 ? billDiscountValue : 0,
       grandTotal,
       gstSupplyType: settings.gstSupplyType,
       gstPriceMode: settings.gstPriceMode,
@@ -353,6 +381,8 @@ export const POSBilling: React.FC = () => {
     cartSubtotal,
     cartTaxTotal,
     discountAmount,
+    billDiscountMode,
+    billDiscountValue,
     grandTotal,
     settings.gstSupplyType,
     settings.gstPriceMode,
@@ -393,13 +423,17 @@ export const POSBilling: React.FC = () => {
         saveCustomer: saveCustomerToDirectory,
         paymentMethod,
         amountTendered: typeof cashTendered === 'number' ? cashTendered : grandTotal,
-        discountPercent: billDiscountPercent,
+        discountMode: billDiscountMode,
+        discountPercent: billDiscountMode === 'percent' ? billDiscountValue : 0,
+        discountAmount: billDiscountMode === 'amount' ? billDiscountValue : 0,
       });
 
       setActiveInvoice(invoice);
       // Reset checkout inputs
       handleClearCustomer();
-      setBillDiscountPercent(0);
+      setBillDiscountValue(0);
+      setCustomDiscountText('');
+      setIsCustomDiscountActive(false);
       setCashTendered('');
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Checkout failed');
@@ -1087,23 +1121,178 @@ export const POSBilling: React.FC = () => {
             </div>
           )}
 
-          {/* Bill Discount Row */}
-          <div className="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400 pt-1 border-t border-neutral-200 dark:border-neutral-800/80">
-            <span>Bill Discount (%):</span>
-            <div className="flex items-center gap-1">
-              {[0, 5, 10, 15].map(pct => (
+          {/* Bill Discount Row (Quick Presets + Custom % / Flat ₹ Option) */}
+          <div className="pt-1.5 border-t border-neutral-200 dark:border-neutral-800/80 space-y-1.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
+                Bill Discount (छूट):
+              </span>
+
+              <div className="flex items-center gap-1 flex-wrap justify-end">
+                {/* % vs ₹ Segmented Mode Switch */}
+                <div className="inline-flex p-0.5 rounded-md bg-neutral-200/80 dark:bg-neutral-800 border border-neutral-300/70 dark:border-neutral-700">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBillDiscountMode('percent');
+                      setBillDiscountValue(0);
+                      setCustomDiscountText('');
+                      if (isCustomDiscountActive) {
+                        setTimeout(() => customDiscountInputRef.current?.focus(), 0);
+                      }
+                    }}
+                    className={`px-2 py-0.5 text-[11px] font-semibold rounded transition-colors cursor-pointer whitespace-nowrap ${
+                      billDiscountMode === 'percent'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                    }`}
+                    title="Percentage Discount (%)"
+                  >
+                    %
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBillDiscountMode('amount');
+                      setBillDiscountValue(0);
+                      setCustomDiscountText('');
+                      if (isCustomDiscountActive) {
+                        setTimeout(() => customDiscountInputRef.current?.focus(), 0);
+                      }
+                    }}
+                    className={`px-2 py-0.5 text-[11px] font-semibold rounded transition-colors cursor-pointer whitespace-nowrap ${
+                      billDiscountMode === 'amount'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                    }`}
+                    title="Flat Rupee Discount (₹)"
+                  >
+                    ₹
+                  </button>
+                </div>
+
+                {/* Preset Chips + Custom Button */}
+                {(billDiscountMode === 'percent' ? [0, 5, 10, 15] : [0, 10, 50, 100]).map(preset => {
+                  const isSelected = !isCustomDiscountActive && billDiscountValue === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setIsCustomDiscountActive(false);
+                        setBillDiscountValue(preset);
+                        setCustomDiscountText(preset === 0 ? '' : String(preset));
+                      }}
+                      className={`px-2 py-0.5 text-[11px] rounded font-mono font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                        isSelected
+                          ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                          : 'bg-neutral-200/70 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-300/70 dark:hover:bg-neutral-700'
+                      }`}
+                    >
+                      {billDiscountMode === 'percent' ? `${preset}%` : `₹${preset}`}
+                    </button>
+                  );
+                })}
+
                 <button
-                  key={pct}
-                  onClick={() => setBillDiscountPercent(pct)}
-                  className={`px-2 py-0.5 text-[11px] rounded font-medium transition-colors ${
-                    billDiscountPercent === pct
-                      ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-                      : 'bg-neutral-200/70 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                  type="button"
+                  onClick={() => {
+                    setIsCustomDiscountActive(true);
+                    setTimeout(() => {
+                      customDiscountInputRef.current?.focus();
+                      customDiscountInputRef.current?.select();
+                    }, 0);
+                  }}
+                  className={`px-2 py-0.5 text-[11px] rounded font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                    isCustomDiscountActive
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
                   }`}
                 >
-                  {pct}%
+                  Custom
                 </button>
-              ))}
+              </div>
+            </div>
+
+            {/* Inline Custom Discount Entry Row (Supports any custom % or flat ₹ + 1-click Round Off) */}
+            <div className="flex items-center gap-1.5">
+              <div
+                className={`flex-1 flex items-center bg-white dark:bg-neutral-800 border rounded-lg px-2.5 py-1 transition-colors ${
+                  isCustomDiscountActive
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+                    : 'border-neutral-300 dark:border-neutral-700'
+                }`}
+              >
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400 mr-1.5 whitespace-nowrap">
+                  {billDiscountMode === 'percent' ? 'Custom %:' : 'Custom ₹:'}
+                </span>
+                <input
+                  ref={customDiscountInputRef}
+                  type="number"
+                  min="0"
+                  max={billDiscountMode === 'percent' ? 100 : undefined}
+                  step="0.01"
+                  value={customDiscountText}
+                  onFocus={() => setIsCustomDiscountActive(true)}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setCustomDiscountText(raw);
+                    setIsCustomDiscountActive(true);
+                    if (raw === '') {
+                      setBillDiscountValue(0);
+                      return;
+                    }
+                    const parsed = Number(raw);
+                    if (!isNaN(parsed)) {
+                      const nextVal =
+                        billDiscountMode === 'percent'
+                          ? Math.max(0, Math.min(100, parsed))
+                          : Math.max(0, parsed);
+                      setBillDiscountValue(nextVal);
+                    }
+                  }}
+                  placeholder={
+                    billDiscountMode === 'percent'
+                      ? 'Enter % (e.g. 7.5, 12, 20)'
+                      : 'Enter ₹ off (e.g. 25, 75)'
+                  }
+                  className="w-full text-xs font-mono font-semibold bg-transparent text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden tabular-nums"
+                />
+                <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 ml-1 shrink-0">
+                  {billDiscountMode === 'percent' ? '%' : '₹'}
+                </span>
+              </div>
+
+              {roundOffDiscountSuggestion > 0 && cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBillDiscountMode('amount');
+                    setIsCustomDiscountActive(true);
+                    setBillDiscountValue(roundOffDiscountSuggestion);
+                    setCustomDiscountText(String(roundOffDiscountSuggestion));
+                  }}
+                  className="px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-[11px] font-mono font-semibold hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  title="Apply exact Round-Off discount"
+                >
+                  Round -₹{roundOffDiscountSuggestion}
+                </button>
+              )}
+
+              {billDiscountValue > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBillDiscountValue(0);
+                    setCustomDiscountText('');
+                    setIsCustomDiscountActive(false);
+                  }}
+                  className="p-1 rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-500 hover:text-rose-600 hover:border-rose-300 transition-colors shrink-0 cursor-pointer"
+                  title="Clear Bill Discount"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1120,7 +1309,21 @@ export const POSBilling: React.FC = () => {
             </div>
             {discountAmount > 0 && (
               <div className="flex justify-between text-amber-300 font-medium">
-                <span>Discount:</span>
+                <span>
+                  {overallBillDiscount > 0 && cartItemDiscounts > 0
+                    ? `Discount (Items + ${
+                        billDiscountMode === 'percent'
+                          ? `${billDiscountValue}%`
+                          : `₹${overallBillDiscount.toFixed(2)}`
+                      }):`
+                    : overallBillDiscount > 0
+                    ? `Bill Discount (${
+                        billDiscountMode === 'percent'
+                          ? `${billDiscountValue}%`
+                          : `Flat ₹${overallBillDiscount.toFixed(2)}`
+                      }):`
+                    : 'Item Discount:'}
+                </span>
                 <span className="font-mono tabular-nums">-₹{discountAmount.toFixed(2)}</span>
               </div>
             )}

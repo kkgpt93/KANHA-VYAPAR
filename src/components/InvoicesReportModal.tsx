@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Printer,
   Download,
@@ -18,6 +19,7 @@ import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { exportInvoicesToCSV } from '../utils/reportExport';
 import { computeInvoiceSlabBreakup, formatGstRate } from '../utils/gst';
+import { printElementCleanly, syncMainDocumentPrintStyle } from '../utils/printEngine';
 
 export interface InvoicesReportModalProps {
   invoices: Invoice[];
@@ -35,10 +37,30 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
   const { settings, activeUser } = useApp();
   const [includeItemsDetail, setIncludeItemsDetail] = useState(true);
   const [customTitle, setCustomTitle] = useState(reportTitle);
+  const reportSheetRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setCustomTitle(reportTitle);
   }, [reportTitle]);
+
+  useEffect(() => {
+    if (!isOpen || invoices.length === 0) {
+      syncMainDocumentPrintStyle(null);
+      return;
+    }
+    syncMainDocumentPrintStyle('a4_report');
+    return () => {
+      syncMainDocumentPrintStyle(null);
+    };
+  }, [isOpen, invoices.length]);
+
+  const handlePrint = useCallback(() => {
+    void printElementCleanly(
+      reportSheetRef.current,
+      'a4_report',
+      `Sales-Register-${new Date().toISOString().slice(0, 10)}`
+    );
+  }, []);
 
   // Keyboard shortcut listener for Escape and Ctrl+P
   useEffect(() => {
@@ -55,13 +77,9 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, handlePrint]);
 
   if (!isOpen || invoices.length === 0) return null;
-
-  const handlePrint = () => {
-    window.print();
-  };
 
   const handleDownloadCSV = () => {
     exportInvoicesToCSV(
@@ -107,79 +125,11 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
   const minDate = dates.length ? new Date(Math.min(...dates)) : null;
   const maxDate = dates.length ? new Date(Math.max(...dates)) : null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-      {/* Container */}
-      <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-5xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto flex flex-col max-h-[92vh] overflow-hidden">
-        {/* Top Control Bar (no-print) */}
-        <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 no-print gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-              <FileText className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-                  PDF & Print Report Preview
-                </h3>
-                <span className="text-neutral-400">·</span>
-                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 font-mono">
-                  {totalCount} Invoices Selected
-                </span>
-              </div>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                Consolidated sales summary and tax statement. Press <kbd className="font-mono px-1 py-0.5 bg-neutral-200 dark:bg-neutral-800 rounded text-[10px]">Ctrl+P</kbd> to save as PDF.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={includeItemsDetail}
-                onChange={e => setIncludeItemsDetail(e.target.checked)}
-                className="rounded text-emerald-600 focus:ring-emerald-500"
-              />
-              <span>Include Items Breakdown</span>
-            </label>
-
-            <button
-              type="button"
-              onClick={handleDownloadCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs"
-              title="Export Selected Invoices to CSV"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export CSV</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors"
-              title="Print or Save PDF (Ctrl+P)"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Print / Save as PDF</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors ml-1"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Paper Canvas Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
-          {/* Printable Document Sheet Container */}
+  const renderReportDocument = (isPrintCopy: boolean) => (
           <div
-            id="printable-invoice-report"
-            className="bg-white text-neutral-900 border border-neutral-300 shadow-xl print:shadow-none print:border-0 rounded-sm w-[820px] max-w-[96vw] p-8 font-sans text-xs space-y-5"
+            ref={isPrintCopy ? undefined : reportSheetRef}
+            id={isPrintCopy ? 'printable-invoice-report-portal' : 'printable-invoice-report'}
+            className="vyapar-print-sheet bg-white text-black border border-neutral-300 shadow-xl print:shadow-none print:border-0 rounded-sm w-[820px] max-w-[96vw] p-8 font-sans text-xs space-y-5"
           >
             {/* Header: Store Branding & Report Meta */}
             <div className="flex justify-between items-start border-b-2 border-neutral-800 pb-4">
@@ -475,6 +425,79 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
               </div>
             </div>
           </div>
+  );
+
+  return (
+    <>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto no-print">
+      {/* Container */}
+      <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-5xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto flex flex-col max-h-[92vh] overflow-hidden">
+        {/* Top Control Bar (no-print) */}
+        <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 no-print gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+              <FileText className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
+                  PDF & Print Report Preview
+                </h3>
+                <span className="text-neutral-400">·</span>
+                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 font-mono">
+                  {totalCount} Invoices Selected
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Consolidated sales summary and tax statement. Press <kbd className="font-mono px-1 py-0.5 bg-neutral-200 dark:bg-neutral-800 rounded text-[10px]">Ctrl+P</kbd> to save as PDF.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeItemsDetail}
+                onChange={e => setIncludeItemsDetail(e.target.checked)}
+                className="rounded text-emerald-600 focus:ring-emerald-500"
+              />
+              <span>Include Items Breakdown</span>
+            </label>
+
+            <button
+              type="button"
+              onClick={handleDownloadCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs"
+              title="Export Selected Invoices to CSV"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export CSV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors cursor-pointer"
+              title="Print or Save PDF (Ctrl+P)"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Print / Save as PDF</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors ml-1 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Paper Canvas Scroll Area */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
+          {renderReportDocument(false)}
         </div>
 
         {/* Modal Bottom Actions (no-print) */}
@@ -487,7 +510,7 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
             <button
               type="button"
               onClick={handleDownloadCSV}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors shadow-2xs cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download CSV File</span>
@@ -496,7 +519,7 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
             <button
               type="button"
               onClick={handlePrint}
-              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors"
+              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 rounded-lg shadow-xs transition-colors cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>Print / Save as PDF (Ctrl+P)</span>
@@ -505,5 +528,13 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
         </div>
       </div>
     </div>
+    {typeof document !== 'undefined' &&
+      createPortal(
+        <div id="vyapar-print-portal" data-print-mode="a4_report">
+          {renderReportDocument(true)}
+        </div>,
+        document.body
+      )}
+    </>
   );
 };

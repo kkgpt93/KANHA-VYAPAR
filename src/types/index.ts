@@ -93,6 +93,8 @@ export interface InvoiceItemInput {
   initialStock?: number;
 }
 
+export type DiscountMode = 'percent' | 'amount';
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -108,6 +110,8 @@ export interface Invoice {
   subtotal: number;
   taxTotal: number;
   discountTotal: number;
+  billDiscountMode?: DiscountMode;
+  billDiscountValue?: number;
   grandTotal: number;
   gstSupplyType?: GstSupplyType;
   gstPriceMode?: GstPriceMode;

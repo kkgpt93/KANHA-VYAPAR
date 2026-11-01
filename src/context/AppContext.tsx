@@ -18,6 +18,7 @@ import {
   CreatorConfig,
   ColorThemeId,
   GstSlabConfig,
+  DiscountMode,
 } from '../types';
 import { StorageService } from '../utils/storage';
 import { generateInvoiceNumber } from '../utils/formatters';
@@ -103,12 +104,19 @@ interface AppContextType {
     saveCustomer?: boolean;
     paymentMethod: 'cash' | 'upi' | 'card' | 'credit';
     amountTendered?: number;
+    discountMode?: DiscountMode;
     discountPercent?: number;
+    discountAmount?: number;
     notes?: string;
   }) => Invoice;
   addItemToInvoice: (invoiceId: string, input: InvoiceItemInput) => Invoice | null;
   updateInvoiceItemQuantity: (invoiceId: string, itemIndex: number, newQuantity: number) => Invoice | null;
   updateInvoiceItemTaxRate: (invoiceId: string, itemIndex: number, taxRate: number) => Invoice | null;
+  updateInvoiceBillDiscount: (
+    invoiceId: string,
+    mode: DiscountMode,
+    value: number
+  ) => Invoice | null;
   createDirectInvoice: (params: {
     items: InvoiceItemInput[];
     customerName?: string;
@@ -116,7 +124,9 @@ interface AppContextType {
     customerAddress?: string;
     customerGstin?: string;
     paymentMethod: PaymentMethod;
+    discountMode?: DiscountMode;
     discountPercent?: number;
+    discountAmount?: number;
     notes?: string;
   }) => Invoice;
   cancelOrRefundInvoice: (invoiceId: string) => void;
@@ -679,6 +689,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCart([]);
   };
 
+  // Helper to resolve custom bill discount (% or flat ₹) safely clamped to bill payable
+  const resolveOverallBillDiscount = (params: {
+    subtotal: number;
+    taxTotal: number;
+    itemDiscounts: number;
+    discountMode?: DiscountMode;
+    discountPercent?: number;
+    discountAmount?: number;
+  }): {
+    overallDiscount: number;
+    billDiscountMode: DiscountMode;
+    billDiscountValue: number;
+  } => {
+    const maxPayableBeforeBillDisc = Math.max(
+      0,
+      roundCurrency(params.subtotal + params.taxTotal - params.itemDiscounts)
+    );
+    const mode: DiscountMode =
+      params.discountMode ||
+      (params.discountAmount !== undefined && params.discountAmount > 0 ? 'amount' : 'percent');
+
+    if (mode === 'amount') {
+      const rawAmt = Math.max(0, Number(params.discountAmount) || 0);
+      const clampedAmt = roundCurrency(Math.min(maxPayableBeforeBillDisc, rawAmt));
+      return {
+        overallDiscount: clampedAmt,
+        billDiscountMode: 'amount',
+        billDiscountValue: clampedAmt,
+      };
+    }
+
+    const pct = Math.max(0, Math.min(100, Number(params.discountPercent) || 0));
+    const rawPctDisc = roundCurrency((params.subtotal * pct) / 100);
+    const clampedPctDisc = roundCurrency(Math.min(maxPayableBeforeBillDisc, rawPctDisc));
+    return {
+      overallDiscount: clampedPctDisc,
+      billDiscountMode: 'percent',
+      billDiscountValue: roundCurrency(pct),
+    };
+  };
+
   // Checkout function
   const checkout = (details: {
     customerId?: string;
@@ -691,14 +742,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveCustomer?: boolean;
     paymentMethod: 'cash' | 'upi' | 'card' | 'credit';
     amountTendered?: number;
+    discountMode?: DiscountMode;
     discountPercent?: number;
+    discountAmount?: number;
     notes?: string;
   }): Invoice => {
     if (cart.length === 0) {
       throw new Error('Cart is empty');
     }
 
-    const billDiscountPercent = details.discountPercent || 0;
     const priceMode = settings.gstPriceMode || 'exclusive';
     const supplyType = settings.gstSupplyType || 'intrastate';
 
@@ -731,9 +783,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       items.reduce((sum, it) => sum + Math.max(0, it.total - it.taxAmount + it.discountAmount), 0)
     );
     const itemDiscounts = roundCurrency(items.reduce((sum, it) => sum + it.discountAmount, 0));
-    const overallDiscount = roundCurrency((subtotal * billDiscountPercent) / 100);
-    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
     const taxTotal = roundCurrency(items.reduce((sum, it) => sum + it.taxAmount, 0));
+    const { overallDiscount, billDiscountMode, billDiscountValue } = resolveOverallBillDiscount({
+      subtotal,
+      taxTotal,
+      itemDiscounts,
+      discountMode: details.discountMode,
+      discountPercent: details.discountPercent,
+      discountAmount: details.discountAmount,
+    });
+    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
     const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
     const amountTendered =
@@ -812,6 +871,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       subtotal,
       taxTotal,
       discountTotal,
+      billDiscountMode: billDiscountValue > 0 ? billDiscountMode : undefined,
+      billDiscountValue: billDiscountValue > 0 ? billDiscountValue : 0,
       grandTotal,
       gstSupplyType: supplyType,
       gstPriceMode: priceMode,
@@ -851,12 +912,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newInvoice;
   };
 
-  // Recalculate invoice totals helper across all GST slabs
+  // Recalculate invoice totals helper across all GST slabs & custom bill discounts
   const recalculateInvoiceWithItems = (prevInv: Invoice, updatedItems: InvoiceItem[]): Invoice => {
     const prevItemsDiscountSum = roundCurrency(
       prevInv.items.reduce((s, it) => s + it.discountAmount, 0)
     );
-    const extraBillDiscount = roundCurrency(
+    const fallbackExtraBillDiscount = roundCurrency(
       Math.max(0, prevInv.discountTotal - prevItemsDiscountSum)
     );
 
@@ -869,8 +930,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const itemDiscounts = roundCurrency(
       updatedItems.reduce((sum, it) => sum + it.discountAmount, 0)
     );
-    const discountTotal = roundCurrency(Math.min(subtotal, itemDiscounts + extraBillDiscount));
     const taxTotal = roundCurrency(updatedItems.reduce((sum, it) => sum + it.taxAmount, 0));
+    const maxPayableBeforeBillDisc = Math.max(0, roundCurrency(subtotal + taxTotal - itemDiscounts));
+
+    let extraBillDiscount = fallbackExtraBillDiscount;
+    if (prevInv.billDiscountMode === 'percent' && prevInv.billDiscountValue !== undefined) {
+      extraBillDiscount = roundCurrency((subtotal * prevInv.billDiscountValue) / 100);
+    } else if (prevInv.billDiscountMode === 'amount' && prevInv.billDiscountValue !== undefined) {
+      extraBillDiscount = roundCurrency(prevInv.billDiscountValue);
+    }
+    const clampedBillDiscount = roundCurrency(Math.min(maxPayableBeforeBillDisc, extraBillDiscount));
+    const discountTotal = roundCurrency(itemDiscounts + clampedBillDiscount);
     const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
     const amountTendered =
@@ -892,6 +962,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amountTendered,
       changeDue,
     };
+  };
+
+  // Update overall custom bill discount (% or flat ₹) on an active paid invoice
+  const updateInvoiceBillDiscount = (
+    invoiceId: string,
+    mode: DiscountMode,
+    value: number
+  ): Invoice | null => {
+    const existingInv = invoices.find(i => i.id === invoiceId);
+    if (!existingInv || existingInv.status !== 'paid') return null;
+
+    const cleanVal = Math.max(0, Number(value) || 0);
+    const normalizedVal = mode === 'percent' ? Math.min(100, cleanVal) : cleanVal;
+    const seededInv: Invoice = {
+      ...existingInv,
+      billDiscountMode: normalizedVal > 0 ? mode : undefined,
+      billDiscountValue: normalizedVal > 0 ? roundCurrency(normalizedVal) : 0,
+    };
+    const recalculated = recalculateInvoiceWithItems(seededInv, existingInv.items);
+    setInvoices(prev => prev.map(i => (i.id === invoiceId ? recalculated : i)));
+    return recalculated;
   };
 
   // Add an item (catalog or custom) directly to an existing active invoice
@@ -1100,7 +1191,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customerAddress?: string;
     customerGstin?: string;
     paymentMethod: PaymentMethod;
+    discountMode?: DiscountMode;
     discountPercent?: number;
+    discountAmount?: number;
     notes?: string;
   }): Invoice => {
     if (!params.items.length) {
@@ -1182,9 +1275,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     );
     const itemDiscounts = roundCurrency(builtItems.reduce((s, it) => s + it.discountAmount, 0));
-    const overallDiscount = roundCurrency((subtotal * (params.discountPercent || 0)) / 100);
-    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
     const taxTotal = roundCurrency(builtItems.reduce((s, it) => s + it.taxAmount, 0));
+    const { overallDiscount, billDiscountMode, billDiscountValue } = resolveOverallBillDiscount({
+      subtotal,
+      taxTotal,
+      itemDiscounts,
+      discountMode: params.discountMode,
+      discountPercent: params.discountPercent,
+      discountAmount: params.discountAmount,
+    });
+    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
     const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
     const trimmedName = params.customerName?.trim() || '';
@@ -1235,6 +1335,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       subtotal,
       taxTotal,
       discountTotal,
+      billDiscountMode: billDiscountValue > 0 ? billDiscountMode : undefined,
+      billDiscountValue: billDiscountValue > 0 ? billDiscountValue : 0,
       grandTotal,
       gstSupplyType: supplyType,
       gstPriceMode: priceMode,
@@ -1921,6 +2023,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addItemToInvoice,
         updateInvoiceItemQuantity,
         updateInvoiceItemTaxRate,
+        updateInvoiceBillDiscount,
         createDirectInvoice,
         cancelOrRefundInvoice,
         addOrUpdateGstSlab,

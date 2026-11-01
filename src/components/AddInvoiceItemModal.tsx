@@ -16,7 +16,7 @@ import {
   Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Invoice, InvoiceItemInput, PaymentMethod, Product } from '../types';
+import { DiscountMode, Invoice, InvoiceItemInput, PaymentMethod, Product } from '../types';
 import { formatCurrency } from '../utils/formatters';
 import {
   calculateLineGst,
@@ -91,11 +91,13 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
   const [catalogQuantities, setCatalogQuantities] = useState<Record<string, number>>({});
   const [catalogTaxOverrides, setCatalogTaxOverrides] = useState<Record<string, number>>({});
 
-  // New-invoice mode draft items & customer fields
+  // New-invoice mode draft items, custom bill discount & customer fields
   const [draftItems, setDraftItems] = useState<InvoiceItemInput[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [billDiscountMode, setBillDiscountMode] = useState<DiscountMode>('percent');
+  const [billDiscountText, setBillDiscountText] = useState<string>('');
 
   // Feedback & validation messages
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -152,10 +154,10 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     };
   }, [unitPrice, quantity, discountPercent, taxRate, effectivePriceMode]);
 
-  // Draft totals for mode === 'new-invoice'
+  // Draft totals for mode === 'new-invoice' including Custom Bill Discount (% or ₹)
   const draftTotals = useMemo(() => {
     let subtotal = 0;
-    let discountTotal = 0;
+    let itemDiscountTotal = 0;
     let taxTotal = 0;
     draftItems.forEach(it => {
       const calc = calculateLineGst({
@@ -166,12 +168,22 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
         priceMode: effectivePriceMode,
       });
       subtotal = roundCurrency(subtotal + calc.taxableValue + calc.discountAmount);
-      discountTotal = roundCurrency(discountTotal + calc.discountAmount);
+      itemDiscountTotal = roundCurrency(itemDiscountTotal + calc.discountAmount);
       taxTotal = roundCurrency(taxTotal + calc.taxAmount);
     });
+
+    const maxPayable = Math.max(0, roundCurrency(subtotal + taxTotal - itemDiscountTotal));
+    const parsedDisc = Math.max(0, Number(billDiscountText) || 0);
+    const extraBillDisc =
+      billDiscountMode === 'amount'
+        ? roundCurrency(Math.min(maxPayable, parsedDisc))
+        : roundCurrency(
+            Math.min(maxPayable, (subtotal * Math.min(100, parsedDisc)) / 100)
+          );
+    const discountTotal = roundCurrency(itemDiscountTotal + extraBillDisc);
     const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
-    return { subtotal, discountTotal, taxTotal, grandTotal };
-  }, [draftItems, effectivePriceMode]);
+    return { subtotal, discountTotal, extraBillDisc, taxTotal, grandTotal };
+  }, [draftItems, effectivePriceMode, billDiscountMode, billDiscountText]);
 
   if (!isOpen) return null;
 
@@ -317,11 +329,15 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     }
 
     try {
+      const parsedDisc = Math.max(0, Number(billDiscountText) || 0);
       const created = createDirectInvoice({
         items: itemsToCreate,
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         paymentMethod,
+        discountMode: billDiscountMode,
+        discountPercent: billDiscountMode === 'percent' ? Math.min(100, parsedDisc) : 0,
+        discountAmount: billDiscountMode === 'amount' ? parsedDisc : 0,
       });
       onClose();
       if (onInvoiceCreated) {
@@ -828,6 +844,9 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                 </h4>
                 {draftItems.length > 0 && (
                   <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                    {draftTotals.discountTotal > 0
+                      ? `Disc: -₹${draftTotals.discountTotal.toFixed(2)} · `
+                      : ''}
                     GST: ₹{draftTotals.taxTotal.toFixed(2)} · Total Payable: ₹
                     {draftTotals.grandTotal.toFixed(2)}
                   </span>
@@ -928,6 +947,77 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                   })}
                 </div>
               )}
+
+              {/* Custom Bill Discount Row (% or Flat ₹) */}
+              <div className="p-2.5 rounded-lg bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-neutral-700 dark:text-neutral-300 whitespace-nowrap">
+                    Bill Discount (कस्टम छूट):
+                  </span>
+                  <div className="inline-flex p-0.5 rounded-md bg-neutral-200/80 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillDiscountMode('percent');
+                        setBillDiscountText('');
+                      }}
+                      className={`px-2 py-0.5 text-[11px] font-semibold rounded transition-colors cursor-pointer ${
+                        billDiscountMode === 'percent'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-neutral-600 dark:text-neutral-400'
+                      }`}
+                    >
+                      %
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBillDiscountMode('amount');
+                        setBillDiscountText('');
+                      }}
+                      className={`px-2 py-0.5 text-[11px] font-semibold rounded transition-colors cursor-pointer ${
+                        billDiscountMode === 'amount'
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-neutral-600 dark:text-neutral-400'
+                      }`}
+                    >
+                      ₹
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(billDiscountMode === 'percent' ? [0, 5, 10, 15] : [0, 20, 50, 100]).map(p => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setBillDiscountText(p === 0 ? '' : String(p))}
+                      className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium transition-colors cursor-pointer ${
+                        (Number(billDiscountText) || 0) === p
+                          ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                          : 'bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300'
+                      }`}
+                    >
+                      {billDiscountMode === 'percent' ? `${p}%` : `₹${p}`}
+                    </button>
+                  ))}
+                  <div className="flex items-center bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-md px-2 py-0.5">
+                    <input
+                      type="number"
+                      min="0"
+                      max={billDiscountMode === 'percent' ? 100 : undefined}
+                      step="0.01"
+                      value={billDiscountText}
+                      onChange={e => setBillDiscountText(e.target.value)}
+                      placeholder={billDiscountMode === 'percent' ? 'Custom %' : 'Custom ₹'}
+                      className="w-20 text-xs font-mono font-semibold bg-transparent text-neutral-900 dark:text-neutral-100 focus:outline-hidden tabular-nums"
+                    />
+                    <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400 ml-1">
+                      {billDiscountMode === 'percent' ? '%' : '₹'}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               {/* Customer & Payment Fields */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
