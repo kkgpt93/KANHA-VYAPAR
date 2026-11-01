@@ -4,11 +4,12 @@ const DYNAMIC_PAGE_STYLE_ID = 'vyapar-dynamic-page-style';
 const PRINT_IFRAME_ID = 'vyapar-clean-print-iframe';
 
 /**
- * Returns @page and print container CSS tailored to the exact physical paper format:
- * - thermal80 : 80mm POS thermal roll (72mm safe printable width, zero margins)
- * - thermal58 : 54mm minimum / 58mm 2-inch mini thermal roll (48mm safe printable width, zero margins)
- * - tax_invoice : A4 portrait formal GST Tax Invoice (8mm page margin, multi-page table repeat)
- * - a4_report : A4 portrait consolidated sales & GST register report (10mm page margin)
+ * Returns @page and print container CSS that preserves 1:1 WYSIWYG parity
+ * with the Screen Preview (.vyapar-paper-sheet + .vyapar-paper-* classes in index.css):
+ * - thermal80   : 80mm paper, 4mm side padding => 72mm inner content (same on Preview & Print)
+ * - thermal58   : 54mm paper, 3mm side padding => 48mm inner content (same on Preview & Print)
+ * - tax_invoice : A4 portrait (210mm), 8mm @page margin => 194mm inner content (same on Preview & Print)
+ * - a4_report   : A4 portrait (210mm), 10mm @page margin => 190mm inner content (same on Preview & Print)
  */
 export function buildFormatPrintCss(mode: PrintPaperMode): string {
   const pageRule =
@@ -26,36 +27,25 @@ export function buildFormatPrintCss(mode: PrintPaperMode): string {
         html, body {
           width: 80mm !important;
           max-width: 100% !important;
+          height: auto !important;
           margin: 0 !important;
           padding: 0 !important;
           background: #ffffff !important;
           color: #000000 !important;
-        }
-        .vyapar-print-sheet {
-          width: 72mm !important;
-          max-width: 100% !important;
-          margin: 0 auto !important;
-          padding: 2mm 1mm 5mm 1mm !important;
-          box-sizing: border-box !important;
-          background: #ffffff !important;
-          color: #000000 !important;
-          box-shadow: none !important;
-          border: none !important;
-          border-radius: 0 !important;
-          font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-          font-size: 11px !important;
-          line-height: 1.3 !important;
-          overflow: visible !important;
-        }
-        .vyapar-print-sheet, .vyapar-print-sheet * {
-          color: #000000 !important;
-          text-shadow: none !important;
-          box-shadow: none !important;
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
-        .vyapar-print-sheet [class*="border-"] {
-          border-color: #000000 !important;
+        .vyapar-paper-sheet.vyapar-paper-thermal80 {
+          width: 80mm !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          margin: 0 auto !important;
+          padding: 3mm 4mm 5mm 4mm !important;
+          box-sizing: border-box !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          overflow: visible !important;
         }
       `
       : mode === 'thermal58'
@@ -63,37 +53,51 @@ export function buildFormatPrintCss(mode: PrintPaperMode): string {
         html, body {
           width: 54mm !important;
           max-width: 100% !important;
+          height: auto !important;
           margin: 0 !important;
           padding: 0 !important;
           background: #ffffff !important;
           color: #000000 !important;
-        }
-        .vyapar-print-sheet {
-          width: 48mm !important;
-          max-width: 100% !important;
-          margin: 0 auto !important;
-          padding: 1.5mm 0.5mm 4mm 0.5mm !important;
-          box-sizing: border-box !important;
-          background: #ffffff !important;
-          color: #000000 !important;
-          box-shadow: none !important;
-          border: none !important;
-          border-radius: 0 !important;
-          font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-          font-size: 9.5px !important;
-          line-height: 1.25 !important;
-          overflow: visible !important;
-          word-break: break-word !important;
-        }
-        .vyapar-print-sheet, .vyapar-print-sheet * {
-          color: #000000 !important;
-          text-shadow: none !important;
-          box-shadow: none !important;
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
-        .vyapar-print-sheet [class*="border-"] {
-          border-color: #000000 !important;
+        .vyapar-paper-sheet.vyapar-paper-thermal54 {
+          width: 54mm !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          margin: 0 auto !important;
+          padding: 2.5mm 3mm 4mm 3mm !important;
+          box-sizing: border-box !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          overflow: visible !important;
+        }
+      `
+      : mode === 'tax_invoice'
+      ? `
+        html, body {
+          width: 100% !important;
+          height: auto !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          color: #000000 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        /* @page already provides the 8mm outer margin on every A4 page => 210mm - 16mm = 194mm exact content width */
+        .vyapar-paper-sheet.vyapar-paper-a4 {
+          width: 100% !important;
+          min-width: 0 !important;
+          max-width: 194mm !important;
+          margin: 0 auto !important;
+          padding: 0 !important;
+          box-sizing: border-box !important;
+          box-shadow: none !important;
+          border: none !important;
+          border-radius: 0 !important;
+          overflow: visible !important;
         }
       `
       : `
@@ -107,33 +111,18 @@ export function buildFormatPrintCss(mode: PrintPaperMode): string {
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
-        .vyapar-print-sheet {
+        /* @page already provides the 10mm outer margin on every A4 report page => 210mm - 20mm = 190mm exact content width */
+        .vyapar-paper-sheet.vyapar-paper-report {
           width: 100% !important;
-          max-width: 194mm !important;
+          min-width: 0 !important;
+          max-width: 190mm !important;
           margin: 0 auto !important;
           padding: 0 !important;
           box-sizing: border-box !important;
-          background: #ffffff !important;
-          color: #000000 !important;
           box-shadow: none !important;
           border: none !important;
           border-radius: 0 !important;
           overflow: visible !important;
-          -webkit-print-color-adjust: exact !important;
-          print-color-adjust: exact !important;
-        }
-        .vyapar-print-sheet table {
-          width: 100% !important;
-          border-collapse: collapse !important;
-          page-break-inside: auto !important;
-        }
-        .vyapar-print-sheet thead {
-          display: table-header-group !important;
-        }
-        .vyapar-print-sheet tr,
-        .vyapar-print-sheet .print-avoid-break {
-          break-inside: avoid !important;
-          page-break-inside: avoid !important;
         }
       `;
 
@@ -143,14 +132,27 @@ export function buildFormatPrintCss(mode: PrintPaperMode): string {
       .no-print {
         display: none !important;
       }
+      .vyapar-paper-sheet table {
+        width: 100%;
+        border-collapse: collapse;
+        page-break-inside: auto;
+      }
+      .vyapar-paper-sheet thead {
+        display: table-header-group;
+      }
+      .vyapar-paper-sheet tr,
+      .vyapar-paper-sheet .print-avoid-break {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
     }
     ${containerRule}
   `;
 }
 
 /**
- * Syncs dynamic @page rules into document.head so even native Browser -> Print (Ctrl+P)
- * respects the active paper format (80mm, 54mm, or A4).
+ * Syncs dynamic @page rules into document.head so native Browser -> Print (Ctrl+P)
+ * also respects the active paper format (80mm, 54mm, or A4).
  */
 export function syncMainDocumentPrintStyle(mode: PrintPaperMode | null): void {
   if (typeof document === 'undefined') return;
@@ -186,9 +188,61 @@ export function syncMainDocumentPrintStyle(mode: PrintPaperMode | null): void {
 }
 
 /**
- * Prints an HTML element inside a dedicated, isolated same-origin hidden <iframe>
- * with pure white/black paper variables (free from dark-mode, theme tinting,
- * parent overflow:hidden clipping, or preview zoom transforms).
+ * Serializes all accessible CSS rules from document.styleSheets synchronously so
+ * Tailwind CSS v4 utilities and .vyapar-paper-* rules are 100% present in the print
+ * iframe immediately, plus collects external cross-origin <link rel="stylesheet"> URLs
+ * (e.g. Google Fonts) so we can await their load cleanly.
+ */
+function collectDocumentStyles(): { inlineCssText: string; externalLinkTags: string } {
+  const inlineChunks: string[] = [];
+  const externalLinks: string[] = [];
+
+  for (const sheet of Array.from(document.styleSheets)) {
+    const ownerNode = sheet.ownerNode as HTMLElement | null;
+    if (ownerNode && ownerNode.id === DYNAMIC_PAGE_STYLE_ID) {
+      continue;
+    }
+
+    try {
+      const rules = sheet.cssRules;
+      if (rules) {
+        const cssText = Array.from(rules)
+          .map(rule => rule.cssText)
+          .join('\n');
+        if (cssText) {
+          inlineChunks.push(cssText);
+        }
+      }
+    } catch {
+      // Cross-origin stylesheet (e.g., Google Fonts): preserve its <link> tag
+      if (sheet.href) {
+        externalLinks.push(
+          `<link rel="stylesheet" href="${sheet.href.replace(/"/g, '&quot;')}" />`
+        );
+      }
+    }
+  }
+
+  // Fallback if no stylesheets were readable
+  if (inlineChunks.length === 0) {
+    const fallbackNodes = Array.from(
+      document.head.querySelectorAll('link[rel="stylesheet"], style')
+    )
+      .filter(node => node.id !== DYNAMIC_PAGE_STYLE_ID)
+      .map(node => node.outerHTML);
+    externalLinks.push(...fallbackNodes);
+  }
+
+  return {
+    inlineCssText: inlineChunks.join('\n'),
+    externalLinkTags: externalLinks.join('\n'),
+  };
+}
+
+/**
+ * Prints the receipt/invoice element inside an isolated hidden same-origin <iframe>
+ * using the exact same .vyapar-paper-sheet and .vyapar-paper-* classes, fonts,
+ * dimensions, borders, and neutral variables as the Bill Preview.
  */
 export async function printElementCleanly(
   sourceElement: HTMLElement | null,
@@ -229,46 +283,32 @@ export async function printElementCleanly(
       return;
     }
 
-    // Clone active stylesheets (<link rel="stylesheet"> & <style>) except dynamic page style
-    const headNodes = Array.from(
-      document.head.querySelectorAll('link[rel="stylesheet"], link[rel="preconnect"], style')
-    )
-      .filter(node => node.id !== DYNAMIC_PAGE_STYLE_ID)
-      .map(node => node.outerHTML)
-      .join('\n');
+    const { inlineCssText, externalLinkTags } = collectDocumentStyles();
 
-    // Clone receipt HTML and ensure .vyapar-print-sheet class is present and inline transforms stripped
+    // Clone the exact preview paper node without modifying its inner typography or borders
     const clonedNode = sourceElement.cloneNode(true) as HTMLElement;
     clonedNode.removeAttribute('style');
-    clonedNode.classList.add('vyapar-print-sheet');
-    // Remove any .no-print interactive widgets from the cloned receipt before printing
+    clonedNode.classList.add('vyapar-paper-sheet');
+    if (mode === 'thermal80') clonedNode.classList.add('vyapar-paper-thermal80');
+    else if (mode === 'thermal58') clonedNode.classList.add('vyapar-paper-thermal54');
+    else if (mode === 'tax_invoice') clonedNode.classList.add('vyapar-paper-a4');
+    else if (mode === 'a4_report') clonedNode.classList.add('vyapar-paper-report');
+
+    // Strip any screen-only interactive controls (.no-print) if edit mode happened to be open
     clonedNode.querySelectorAll('.no-print').forEach(el => el.remove());
 
-    // Override custom theme neutral variables to pure crisp print grays/black/white
-    const purePrintPaletteReset = `
-      :root {
-        --color-neutral-50: #fafafa !important;
-        --color-neutral-100: #f4f4f5 !important;
-        --color-neutral-200: #e4e4e7 !important;
-        --color-neutral-300: #d4d4d8 !important;
-        --color-neutral-400: #71717a !important;
-        --color-neutral-500: #52525b !important;
-        --color-neutral-600: #3f3f46 !important;
-        --color-neutral-700: #27272a !important;
-        --color-neutral-800: #18181b !important;
-        --color-neutral-900: #000000 !important;
-        --color-neutral-950: #000000 !important;
-      }
-    `;
-
+    const baseHref = window.location.href.replace(/"/g, '&quot;');
     const htmlString = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <base href="${baseHref}" />
     <title>${documentTitle.replace(/[<>]/g, '')}</title>
-    ${headNodes}
-    <style>
-      ${purePrintPaletteReset}
+    ${externalLinkTags}
+    <style id="vyapar-serialized-app-css">
+      ${inlineCssText}
+    </style>
+    <style id="vyapar-wysiwyg-print-css">
       ${buildFormatPrintCss(mode)}
     </style>
   </head>
@@ -281,41 +321,70 @@ export async function printElementCleanly(
     iframeDoc.write(htmlString);
     iframeDoc.close();
 
-    // Wait for fonts & QR images inside the print iframe to finish decoding
-    const images = Array.from(iframeDoc.images || []);
-    await Promise.all(
-      images.map(
-        img =>
-          new Promise<void>(resolve => {
-            if (img.complete) {
-              resolve();
-              return;
-            }
-            img.onload = () => resolve();
-            img.onerror = () => resolve();
-          })
-      )
-    );
-
-    if (iframeDoc.fonts && iframeDoc.fonts.ready) {
+    // 1. Wait for any external font stylesheets (<link rel="stylesheet">) with a safe timeout
+    const linkEls = Array.from(
+      iframeDoc.querySelectorAll('link[rel="stylesheet"]')
+    ) as HTMLLinkElement[];
+    if (linkEls.length > 0) {
       await Promise.race([
-        iframeDoc.fonts.ready,
-        new Promise(resolve => setTimeout(resolve, 400)),
+        Promise.all(
+          linkEls.map(
+            link =>
+              new Promise<void>(resolve => {
+                if (link.sheet) {
+                  resolve();
+                  return;
+                }
+                link.onload = () => resolve();
+                link.onerror = () => resolve();
+              })
+          )
+        ),
+        new Promise<void>(resolve => setTimeout(resolve, 800)),
       ]);
     }
 
-    await new Promise(resolve => setTimeout(resolve, 60));
+    // 2. Wait for QR / logo images inside the print iframe to finish decoding
+    const images = Array.from(iframeDoc.images || []);
+    if (images.length > 0) {
+      await Promise.race([
+        Promise.all(
+          images.map(
+            img =>
+              new Promise<void>(resolve => {
+                if (img.complete) {
+                  resolve();
+                  return;
+                }
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              })
+          )
+        ),
+        new Promise<void>(resolve => setTimeout(resolve, 800)),
+      ]);
+    }
+
+    // 3. Wait for webfonts (Plus Jakarta Sans / JetBrains Mono) so line breaks match Preview 1:1
+    if (iframeDoc.fonts && iframeDoc.fonts.ready) {
+      await Promise.race([
+        iframeDoc.fonts.ready,
+        new Promise<void>(resolve => setTimeout(resolve, 600)),
+      ]);
+    }
+
+    // Allow layout & paint flush inside iframe before invoking print
+    await new Promise<void>(resolve => setTimeout(resolve, 80));
 
     iframeWin.focus();
     iframeWin.print();
 
-    // Cleanup iframe after print dialog closes
     setTimeout(() => {
       const stale = document.getElementById(PRINT_IFRAME_ID);
       if (stale && stale.parentNode) {
         stale.parentNode.removeChild(stale);
       }
-    }, 3000);
+    }, 3500);
   } catch {
     window.print();
   }

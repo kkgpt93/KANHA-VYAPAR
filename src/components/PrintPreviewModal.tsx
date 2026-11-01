@@ -105,6 +105,23 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     };
   }, [liveInvoice, isOpen, format]);
 
+  // Keep true physical paper dimensions (80mm / 54mm / 210mm) without reflow, scaling A4 only on narrow screens
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (format === 'tax_invoice') {
+      const availableWidth = window.innerWidth - 56;
+      const a4PixelWidth = 794; // 210mm at 96dpi
+      if (availableWidth < a4PixelWidth) {
+        const fittedZoom = Math.max(50, Math.min(100, Math.floor((availableWidth / a4PixelWidth) * 100)));
+        setZoomLevel(fittedZoom);
+      } else {
+        setZoomLevel(100);
+      }
+    } else {
+      setZoomLevel(100);
+    }
+  }, [format]);
+
   // Generate high-contrast monochrome UPI QR Code for crisp thermal & laser printing
   useEffect(() => {
     if (!liveInvoice) return;
@@ -235,17 +252,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
       <div
         ref={isPrintCopy ? undefined : printSheetRef}
         id={isPrintCopy ? 'printable-receipt-portal-sheet' : 'printable-receipt'}
-        className={`vyapar-print-sheet bg-white text-black ${
-          isPrintCopy
-            ? ''
-            : 'border border-neutral-300 shadow-xl rounded-xs'
-        } ${
+        className={`vyapar-paper-sheet ${
           format === 'thermal80'
-            ? 'w-[302px] px-3.5 py-4 font-mono text-[11px] leading-snug'
+            ? 'vyapar-paper-thermal80'
             : format === 'thermal58'
-            ? 'w-[208px] px-2 py-3 font-mono text-[9.5px] leading-tight'
-            : 'w-[760px] max-w-[95vw] p-7 font-sans text-xs'
-        }`}
+            ? 'vyapar-paper-thermal54'
+            : 'vyapar-paper-a4'
+        } ${isPrintCopy ? '' : 'border border-neutral-300 shadow-2xl'}`}
       >
         {/* ===================================================================== */}
         {/* FORMAT 1: 80mm STANDARD POS THERMAL RECEIPT (72mm Printable Width)    */}
@@ -438,33 +451,6 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   );
                 })}
               </div>
-
-              {showInteractive && canModifyInvoice && (
-                <div className="no-print mt-2 pt-2 border-t border-dotted border-neutral-300 flex items-center justify-between gap-1.5 font-sans">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddItemModalOpen(true)}
-                    className="flex-1 py-1.5 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add Item</span>
-                  </button>
-                  {!isDraft && (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingItems(prev => !prev)}
-                      className={`py-1.5 px-2.5 rounded-md border text-[11px] font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer ${
-                        isEditingItems
-                          ? 'border-neutral-800 bg-neutral-900 text-white'
-                          : 'border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700'
-                      }`}
-                    >
-                      <Pencil className="w-3 h-3" />
-                      <span>{isEditingItems ? 'Done' : 'Edit Qty / GST'}</span>
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* 80mm Totals & GST Breakup */}
@@ -728,28 +714,6 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   </div>
                 ))}
               </div>
-
-              {showInteractive && canModifyInvoice && (
-                <div className="no-print mt-1.5 pt-1.5 border-t border-dotted border-neutral-300 flex flex-col gap-1 font-sans">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddItemModalOpen(true)}
-                    className="w-full py-1 px-2 rounded bg-emerald-600 text-white text-[10px] font-semibold inline-flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>+ Add Item</span>
-                  </button>
-                  {!isDraft && (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingItems(prev => !prev)}
-                      className="w-full py-1 px-2 rounded border border-neutral-300 bg-neutral-100 text-neutral-800 text-[10px] font-semibold cursor-pointer"
-                    >
-                      {isEditingItems ? 'Done Editing' : 'Edit Qty / Disc'}
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* 54mm Compact Totals */}
@@ -1154,38 +1118,6 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   })}
                 </tbody>
               </table>
-
-              {showInteractive && canModifyInvoice && (
-                <div className="no-print p-2.5 bg-neutral-50 border-t border-neutral-300 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddItemModalOpen(true)}
-                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add Item to Invoice (आइटम जोड़ें)</span>
-                  </button>
-
-                  {!isDraft && (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingItems(prev => !prev)}
-                      className={`px-3 py-1.5 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
-                        isEditingItems
-                          ? 'border-neutral-800 bg-neutral-900 text-white'
-                          : 'border-neutral-300 bg-white hover:bg-neutral-100 text-neutral-700'
-                      }`}
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                      <span>
-                        {isEditingItems
-                          ? 'Done Editing Items & GST'
-                          : 'Edit Qty / GST / Discount'}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Formal Slab-Wise GST Tax Summary Table */}
@@ -1397,7 +1329,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto no-print">
         {/* Modal Container */}
-        <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-4xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto flex flex-col max-h-[92vh] overflow-hidden">
+        <div className="bg-white dark:bg-neutral-900 rounded-xl max-w-5xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto flex flex-col max-h-[94vh] overflow-hidden">
           {/* Top Toolbar Header */}
           <div className="flex flex-wrap items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 gap-3">
             <div className="flex items-center gap-2.5">
@@ -1421,7 +1353,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   )}
                 </div>
                 <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                  Exact 80mm, A4 & 54mm physical paper engine. Press{' '}
+                  1:1 Exact Preview & Print (80mm · A4 · 54mm). Press{' '}
                   <kbd className="font-mono px-1 py-0.5 bg-neutral-200 dark:bg-neutral-800 rounded text-[10px]">
                     Ctrl+P
                   </kbd>{' '}
@@ -1442,6 +1374,21 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     <Plus className="w-3.5 h-3.5" />
                     <span>+ Add Item</span>
                   </button>
+                  {!isDraft && (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingItems(prev => !prev)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        isEditingItems
+                          ? 'border-neutral-800 bg-neutral-900 text-white dark:bg-amber-500 dark:text-neutral-950 dark:border-amber-400'
+                          : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'
+                      }`}
+                      title="Edit Quantity, GST Slab or Bill Discount"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>{isEditingItems ? 'Done Editing' : 'Edit Bill'}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setIsSlabManagerOpen(true)}
@@ -1565,7 +1512,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <span className="text-neutral-500 mr-1">Preview Zoom:</span>
                 <button
                   type="button"
-                  onClick={() => setZoomLevel(prev => Math.max(75, prev - 10))}
+                  onClick={() => setZoomLevel(prev => Math.max(50, prev - 10))}
                   className="p-1 rounded bg-white dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 text-neutral-700 dark:text-neutral-200 cursor-pointer"
                   title="Zoom Out"
                 >
@@ -1576,7 +1523,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setZoomLevel(prev => Math.min(130, prev + 10))}
+                  onClick={() => setZoomLevel(prev => Math.min(140, prev + 10))}
                   className="p-1 rounded bg-white dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 text-neutral-700 dark:text-neutral-200 cursor-pointer"
                   title="Zoom In"
                 >
@@ -1587,28 +1534,32 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   onClick={() => setZoomLevel(100)}
                   className="px-1.5 py-0.5 text-[10px] rounded bg-white dark:bg-neutral-700 border border-neutral-200 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 ml-1 cursor-pointer"
                 >
-                  Reset
+                  100%
                 </button>
               </div>
             </div>
           )}
 
-          {/* Paper Canvas Preview Area */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
+          {/* Paper Canvas Preview Area — Exact 1:1 WYSIWYG Physical Millimeter Sheet */}
+          <div className="flex-1 overflow-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
             <div className="mb-3 text-[11px] font-mono text-neutral-600 dark:text-neutral-400 text-center">
               {format === 'thermal80'
-                ? '80mm Roll (72mm Safe Printable Width) · Print Dialog में Margins: None और Scale: 100% रखें'
+                ? '1:1 Exact 80mm Thermal Sheet (72mm Inner Print Area) · Preview = Print'
                 : format === 'tax_invoice'
-                ? 'A4 Portrait Sheet (210mm × 297mm) · Formal Multi-Page GST Tax Invoice'
-                : '54mm Minimum Roll (48mm Safe Printable Width) · 2-Inch Mini / Bluetooth Thermal POS'}
+                ? '1:1 Exact A4 Tax Invoice Sheet (210mm × 297mm) · Preview = Print'
+                : '1:1 Exact 54mm Mini Thermal Sheet (48mm Inner Print Area) · Preview = Print'}
             </div>
 
             <div
-              style={{
-                transform: `scale(${zoomLevel / 100})`,
-                transformOrigin: 'top center',
-              }}
-              className="transition-transform duration-150"
+              style={
+                zoomLevel !== 100
+                  ? {
+                      transform: `scale(${zoomLevel / 100})`,
+                      transformOrigin: 'top center',
+                    }
+                  : undefined
+              }
+              className="transition-transform duration-150 shrink-0"
             >
               {renderReceiptDocument(false)}
             </div>
@@ -1618,14 +1569,30 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           <div className="px-4 py-3 bg-neutral-100 dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               {canModifyInvoice && (
-                <button
-                  type="button"
-                  onClick={() => setIsAddItemModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add Item (आइटम जोड़ें)</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddItemModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add Item (आइटम जोड़ें)</span>
+                  </button>
+                  {!isDraft && (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingItems(prev => !prev)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        isEditingItems
+                          ? 'border-neutral-800 bg-neutral-900 text-white dark:bg-amber-500 dark:text-neutral-950 dark:border-amber-400'
+                          : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-700'
+                      }`}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>{isEditingItems ? 'Done Editing' : 'Edit Qty / GST / Disc'}</span>
+                    </button>
+                  )}
+                </>
               )}
 
               <button

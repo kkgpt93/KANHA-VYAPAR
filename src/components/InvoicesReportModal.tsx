@@ -129,7 +129,9 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
           <div
             ref={isPrintCopy ? undefined : reportSheetRef}
             id={isPrintCopy ? 'printable-invoice-report-portal' : 'printable-invoice-report'}
-            className="vyapar-print-sheet bg-white text-black border border-neutral-300 shadow-xl print:shadow-none print:border-0 rounded-sm w-[820px] max-w-[96vw] p-8 font-sans text-xs space-y-5"
+            className={`vyapar-paper-sheet vyapar-paper-report ${
+              isPrintCopy ? '' : 'border border-neutral-300 shadow-2xl'
+            } space-y-5`}
           >
             {/* Header: Store Branding & Report Meta */}
             <div className="flex justify-between items-start border-b-2 border-neutral-800 pb-4">
@@ -496,8 +498,10 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
         </div>
 
         {/* Paper Canvas Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
-          {renderReportDocument(false)}
+        <div className="flex-1 overflow-auto p-4 sm:p-6 bg-neutral-200/70 dark:bg-neutral-950 flex flex-col items-center justify-start min-h-[380px]">
+          <div className="shrink-0">
+            {renderReportDocument(false)}
+          </div>
         </div>
 
         {/* Modal Bottom Actions (no-print) */}

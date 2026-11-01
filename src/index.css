@@ -199,12 +199,79 @@
   color: var(--cmd-gold);
 }
 
+/* ==========================================================================
+   1:1 WYSIWYG Physical Paper Styles (Identical in Screen Preview & Print!)
+   ========================================================================== */
+.vyapar-paper-sheet {
+  box-sizing: border-box !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+  /* Lock neutral palette to pure crisp paper tones regardless of active UI theme */
+  --color-neutral-50: #fafafa;
+  --color-neutral-100: #f4f4f5;
+  --color-neutral-200: #e4e4e7;
+  --color-neutral-300: #d4d4d8;
+  --color-neutral-400: #71717a;
+  --color-neutral-500: #52525b;
+  --color-neutral-600: #3f3f46;
+  --color-neutral-700: #27272a;
+  --color-neutral-800: #18181b;
+  --color-neutral-900: #000000;
+  --color-neutral-950: #000000;
+}
+
+/* Format 1: 80mm Thermal Roll (80mm paper, 4mm side margins => 72mm content) */
+.vyapar-paper-thermal80 {
+  width: 80mm !important;
+  min-width: 80mm;
+  max-width: 80mm;
+  padding: 3mm 4mm 5mm 4mm !important;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  font-size: 11px !important;
+  line-height: 1.32 !important;
+}
+
+/* Format 2: 54mm Minimum / 2-Inch Thermal Roll (54mm paper, 3mm side margins => 48mm content) */
+.vyapar-paper-thermal54 {
+  width: 54mm !important;
+  min-width: 54mm;
+  max-width: 54mm;
+  padding: 2.5mm 3mm 4mm 3mm !important;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  font-size: 9.5px !important;
+  line-height: 1.28 !important;
+  word-break: break-word;
+}
+
+/* Format 3: A4 Portrait GST Tax Invoice (210mm paper, 8mm margins => 194mm content) */
+.vyapar-paper-a4 {
+  width: 210mm !important;
+  min-width: 210mm;
+  max-width: 210mm;
+  padding: 8mm !important;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+
+/* Consolidated A4 Sales Report */
+.vyapar-paper-report {
+  width: 210mm !important;
+  max-width: 210mm;
+  padding: 10mm !important;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+
 /* Screen-only hiding for dedicated body print portal */
 #vyapar-print-portal {
   display: none;
 }
 
-/* Print Styles for 80mm Thermal, 54mm Minimum Mini Thermal & A4 Tax Invoices / Reports */
+/* Print Media Isolation — Preserves Exact Same Layout & Dimensions as Preview */
 @media print {
   html,
   body {
@@ -217,26 +284,13 @@
     padding: 0 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
-    --color-neutral-50: #fafafa !important;
-    --color-neutral-100: #f4f4f5 !important;
-    --color-neutral-200: #e4e4e7 !important;
-    --color-neutral-300: #d4d4d8 !important;
-    --color-neutral-400: #71717a !important;
-    --color-neutral-500: #52525b !important;
-    --color-neutral-600: #3f3f46 !important;
-    --color-neutral-700: #27272a !important;
-    --color-neutral-800: #18181b !important;
-    --color-neutral-900: #000000 !important;
-    --color-neutral-950: #000000 !important;
   }
 
-  /* Completely remove the app shell, modals, scroll containers & transforms from print layout */
   body > #root,
   .no-print {
     display: none !important;
   }
 
-  /* Render only the isolated print portal at document.body root */
   body > #vyapar-print-portal {
     display: block !important;
     position: static !important;
@@ -247,75 +301,51 @@
     padding: 0 !important;
   }
 
-  /* 80mm Standard POS Thermal Roll (72mm safe printable width) */
-  #vyapar-print-portal[data-print-mode="thermal80"] .vyapar-print-sheet {
-    width: 72mm !important;
-    max-width: 100% !important;
+  .vyapar-paper-sheet {
     margin: 0 auto !important;
-    padding: 2mm 1mm 5mm 1mm !important;
-    box-sizing: border-box !important;
     box-shadow: none !important;
     border: none !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 11px !important;
-    line-height: 1.3 !important;
-    color: #000000 !important;
+    border-radius: 0 !important;
   }
 
-  /* 54mm Minimum / 58mm Mini Thermal Roll (48mm safe printable width) */
-  #vyapar-print-portal[data-print-mode="thermal58"] .vyapar-print-sheet {
-    width: 48mm !important;
-    max-width: 100% !important;
-    margin: 0 auto !important;
-    padding: 1.5mm 0.5mm 4mm 0.5mm !important;
-    box-sizing: border-box !important;
-    box-shadow: none !important;
-    border: none !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 9.5px !important;
-    line-height: 1.25 !important;
-    color: #000000 !important;
-    word-break: break-word !important;
-  }
-
-  #vyapar-print-portal[data-print-mode="thermal80"] .vyapar-print-sheet *,
-  #vyapar-print-portal[data-print-mode="thermal58"] .vyapar-print-sheet * {
-    color: #000000 !important;
-    text-shadow: none !important;
-    box-shadow: none !important;
-  }
-
-  #vyapar-print-portal[data-print-mode="thermal80"] .vyapar-print-sheet [class*="border-"],
-  #vyapar-print-portal[data-print-mode="thermal58"] .vyapar-print-sheet [class*="border-"] {
-    border-color: #000000 !important;
-  }
-
-  /* A4 Formal GST Tax Invoice & Consolidated Sales Report */
-  #vyapar-print-portal[data-print-mode="tax_invoice"] .vyapar-print-sheet,
-  #vyapar-print-portal[data-print-mode="a4_report"] .vyapar-print-sheet {
+  /* When @page applies 8mm / 10mm hardware page margin on A4, keep inner content exact 194mm / 190mm */
+  .vyapar-paper-a4 {
     width: 100% !important;
+    min-width: 0 !important;
     max-width: 194mm !important;
-    margin: 0 auto !important;
     padding: 0 !important;
-    box-sizing: border-box !important;
-    box-shadow: none !important;
-    border: none !important;
-    background: #ffffff !important;
-    color: #000000 !important;
   }
 
-  #vyapar-print-portal table {
+  .vyapar-paper-report {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 190mm !important;
+    padding: 0 !important;
+  }
+
+  /* If printer driver already restricts printable area narrower than 80mm / 54mm, clamp cleanly */
+  .vyapar-paper-thermal80 {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .vyapar-paper-thermal54 {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .vyapar-paper-sheet table {
     width: 100% !important;
     border-collapse: collapse !important;
     page-break-inside: auto !important;
   }
 
-  #vyapar-print-portal thead {
+  .vyapar-paper-sheet thead {
     display: table-header-group !important;
   }
 
-  #vyapar-print-portal tr,
-  #vyapar-print-portal .print-avoid-break {
+  .vyapar-paper-sheet tr,
+  .vyapar-paper-sheet .print-avoid-break {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
