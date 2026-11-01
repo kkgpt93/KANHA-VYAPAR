@@ -10,9 +10,22 @@ export interface User {
   hasBiometrics?: boolean;
 }
 
+export interface GstSlabConfig {
+  id: string;
+  rate: number;
+  label: string;
+  description?: string;
+  enabled: boolean;
+  isCustom?: boolean;
+}
+
+export type GstSupplyType = 'intrastate' | 'interstate';
+export type GstPriceMode = 'exclusive' | 'inclusive';
+
 export interface Product {
   id: string;
   barcode: string;
+  hsnCode?: string;
   name: string;
   nameHindi?: string;
   category: string;
@@ -21,7 +34,7 @@ export interface Product {
   stock: number;
   minStockAlert: number;
   unit: 'pcs' | 'kg' | 'g' | 'ltr' | 'ml' | 'pkt' | 'box';
-  taxRate: number; // e.g. 0, 5, 12, 18
+  taxRate: number; // any GST slab e.g. 0, 0.25, 1.5, 3, 5, 12, 18, 28 or custom %
   imageUrl?: string;
   updatedAt: string;
 }
@@ -53,6 +66,7 @@ export interface InvoiceItem {
   productId: string;
   name: string;
   barcode: string;
+  hsnCode?: string;
   unit: string;
   quantity: number;
   unitPrice: number;
@@ -68,6 +82,7 @@ export interface InvoiceItemInput {
   nameHindi?: string;
   category?: string;
   barcode?: string;
+  hsnCode?: string;
   unit: Product['unit'];
   quantity: number;
   unitPrice: number;
@@ -94,6 +109,8 @@ export interface Invoice {
   taxTotal: number;
   discountTotal: number;
   grandTotal: number;
+  gstSupplyType?: GstSupplyType;
+  gstPriceMode?: GstPriceMode;
   paymentMethod: PaymentMethod;
   amountTendered?: number;
   changeDue?: number;
@@ -131,6 +148,9 @@ export interface StoreSettings {
   soundEnabled: boolean;
   autoPrintReceipt: boolean;
   defaultTaxRate: number;
+  gstSlabs: GstSlabConfig[];
+  gstSupplyType: GstSupplyType;
+  gstPriceMode: GstPriceMode;
 }
 
 export type ActiveTab =

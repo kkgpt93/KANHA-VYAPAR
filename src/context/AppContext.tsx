@@ -17,11 +17,19 @@ import {
   GeneratedKeyRecord,
   CreatorConfig,
   ColorThemeId,
+  GstSlabConfig,
 } from '../types';
 import { StorageService } from '../utils/storage';
 import { generateInvoiceNumber } from '../utils/formatters';
 import { soundManager } from '../utils/audio';
 import { COLOR_THEMES, DEFAULT_COLOR_THEME } from '../utils/themes';
+import {
+  DEFAULT_GST_SLABS,
+  calculateLineGst,
+  formatGstRate,
+  normalizeGstSlabs,
+  roundCurrency,
+} from '../utils/gst';
 import {
   LicenseStorage,
   evaluateLicenseStatus,
@@ -81,6 +89,8 @@ interface AppContextType {
   removeFromCart: (productId: string) => void;
   updateCartQuantity: (productId: string, quantity: number) => void;
   updateCartDiscount: (productId: string, discountPercent: number) => void;
+  updateCartTaxRate: (productId: string, taxRate: number) => void;
+  applyGstSlabToCart: (taxRate: number) => void;
   clearCart: () => void;
   checkout: (details: {
     customerId?: string;
@@ -98,6 +108,7 @@ interface AppContextType {
   }) => Invoice;
   addItemToInvoice: (invoiceId: string, input: InvoiceItemInput) => Invoice | null;
   updateInvoiceItemQuantity: (invoiceId: string, itemIndex: number, newQuantity: number) => Invoice | null;
+  updateInvoiceItemTaxRate: (invoiceId: string, itemIndex: number, taxRate: number) => Invoice | null;
   createDirectInvoice: (params: {
     items: InvoiceItemInput[];
     customerName?: string;
@@ -109,7 +120,16 @@ interface AppContextType {
     notes?: string;
   }) => Invoice;
   cancelOrRefundInvoice: (invoiceId: string) => void;
-  // Settings & notifications
+  // GST Slab Management & Settings
+  addOrUpdateGstSlab: (params: {
+    rate: number;
+    label?: string;
+    description?: string;
+    setAsDefault?: boolean;
+  }) => GstSlabConfig;
+  toggleGstSlab: (slabId: string) => void;
+  deleteGstSlab: (slabId: string) => void;
+  resetGstSlabsToDefault: () => void;
   updateSettings: (newSettings: StoreSettings) => void;
   markNotificationRead: (id: string) => void;
   clearNotifications: () => void;
@@ -634,9 +654,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateCartDiscount = (productId: string, discountPercent: number) => {
     setCart(prev =>
       prev.map(item =>
-        item.product.id === productId ? { ...item, discountPercent: Math.max(0, Math.min(100, discountPercent)) } : item
+        item.product.id === productId
+          ? { ...item, discountPercent: Math.max(0, Math.min(100, discountPercent)) }
+          : item
       )
     );
+  };
+
+  const updateCartTaxRate = (productId: string, taxRate: number) => {
+    const cleanRate = Math.max(0, Math.min(100, Number(taxRate) || 0));
+    setCart(prev =>
+      prev.map(item =>
+        item.product.id === productId ? { ...item, taxRate: cleanRate } : item
+      )
+    );
+  };
+
+  const applyGstSlabToCart = (taxRate: number) => {
+    const cleanRate = Math.max(0, Math.min(100, Number(taxRate) || 0));
+    setCart(prev => prev.map(item => ({ ...item, taxRate: cleanRate })));
   };
 
   const clearCart = () => {
@@ -663,42 +699,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const billDiscountPercent = details.discountPercent || 0;
-    
-    // Calculate items
-    const items = cart.map(ci => {
-      const gross = ci.quantity * ci.unitPrice;
-      const itemDiscount = (gross * (ci.discountPercent || 0)) / 100;
-      const netAfterItemDiscount = gross - itemDiscount;
-      const taxAmt = Math.round((netAfterItemDiscount * ci.taxRate) / 100);
-      const total = netAfterItemDiscount + taxAmt;
+    const priceMode = settings.gstPriceMode || 'exclusive';
+    const supplyType = settings.gstSupplyType || 'intrastate';
+
+    // Calculate items across any GST slab
+    const items: InvoiceItem[] = cart.map(ci => {
+      const calc = calculateLineGst({
+        quantity: ci.quantity,
+        unitPrice: ci.unitPrice,
+        discountPercent: ci.discountPercent || 0,
+        taxRate: ci.taxRate,
+        priceMode,
+      });
 
       return {
         productId: ci.product.id,
         name: ci.product.name,
         barcode: ci.product.barcode,
+        hsnCode: ci.product.hsnCode,
         unit: ci.product.unit,
         quantity: ci.quantity,
         unitPrice: ci.unitPrice,
         taxRate: ci.taxRate,
-        taxAmount: taxAmt,
-        discountAmount: itemDiscount,
-        total,
+        taxAmount: calc.taxAmount,
+        discountAmount: calc.discountAmount,
+        total: calc.total,
       };
     });
 
-    const subtotal = items.reduce((sum, it) => sum + (it.quantity * it.unitPrice), 0);
-    const itemDiscounts = items.reduce((sum, it) => sum + it.discountAmount, 0);
-    const overallDiscount = (subtotal * billDiscountPercent) / 100;
-    const discountTotal = itemDiscounts + overallDiscount;
-    const taxTotal = items.reduce((sum, it) => sum + it.taxAmount, 0);
-    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+    const subtotal = roundCurrency(
+      items.reduce((sum, it) => sum + Math.max(0, it.total - it.taxAmount + it.discountAmount), 0)
+    );
+    const itemDiscounts = roundCurrency(items.reduce((sum, it) => sum + it.discountAmount, 0));
+    const overallDiscount = roundCurrency((subtotal * billDiscountPercent) / 100);
+    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
+    const taxTotal = roundCurrency(items.reduce((sum, it) => sum + it.taxAmount, 0));
+    const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
-    const amountTendered = details.paymentMethod === 'cash' 
-      ? (details.amountTendered || grandTotal) 
-      : grandTotal;
-    const changeDue = details.paymentMethod === 'cash' 
-      ? Math.max(0, amountTendered - grandTotal) 
-      : 0;
+    const amountTendered =
+      details.paymentMethod === 'cash'
+        ? details.amountTendered ?? grandTotal
+        : grandTotal;
+    const changeDue =
+      details.paymentMethod === 'cash'
+        ? roundCurrency(Math.max(0, amountTendered - grandTotal))
+        : 0;
 
     // Process customer details & auto-save to directory if requested or phone provided
     let assignedCustomerId = details.customerId;
@@ -768,6 +813,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       taxTotal,
       discountTotal,
       grandTotal,
+      gstSupplyType: supplyType,
+      gstPriceMode: priceMode,
       paymentMethod: details.paymentMethod,
       amountTendered,
       changeDue,
@@ -804,24 +851,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newInvoice;
   };
 
-  // Recalculate invoice totals helper
+  // Recalculate invoice totals helper across all GST slabs
   const recalculateInvoiceWithItems = (prevInv: Invoice, updatedItems: InvoiceItem[]): Invoice => {
-    const prevItemsDiscountSum = prevInv.items.reduce((s, it) => s + it.discountAmount, 0);
-    const extraBillDiscount = Math.max(0, prevInv.discountTotal - prevItemsDiscountSum);
+    const prevItemsDiscountSum = roundCurrency(
+      prevInv.items.reduce((s, it) => s + it.discountAmount, 0)
+    );
+    const extraBillDiscount = roundCurrency(
+      Math.max(0, prevInv.discountTotal - prevItemsDiscountSum)
+    );
 
-    const subtotal = updatedItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
-    const itemDiscounts = updatedItems.reduce((sum, it) => sum + it.discountAmount, 0);
-    const discountTotal = Math.min(subtotal, itemDiscounts + extraBillDiscount);
-    const taxTotal = updatedItems.reduce((sum, it) => sum + it.taxAmount, 0);
-    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+    const subtotal = roundCurrency(
+      updatedItems.reduce(
+        (sum, it) => sum + Math.max(0, it.total - it.taxAmount + it.discountAmount),
+        0
+      )
+    );
+    const itemDiscounts = roundCurrency(
+      updatedItems.reduce((sum, it) => sum + it.discountAmount, 0)
+    );
+    const discountTotal = roundCurrency(Math.min(subtotal, itemDiscounts + extraBillDiscount));
+    const taxTotal = roundCurrency(updatedItems.reduce((sum, it) => sum + it.taxAmount, 0));
+    const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
     const amountTendered =
       prevInv.paymentMethod === 'cash'
-        ? Math.max(prevInv.amountTendered || 0, grandTotal)
+        ? roundCurrency(Math.max(prevInv.amountTendered || 0, grandTotal))
         : grandTotal;
     const changeDue =
       prevInv.paymentMethod === 'cash'
-        ? Math.max(0, amountTendered - grandTotal)
+        ? roundCurrency(Math.max(0, amountTendered - grandTotal))
         : 0;
 
     return {
@@ -845,9 +903,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const rate = Math.max(0, Number(input.unitPrice) || 0);
     const taxRate = Math.max(0, Number(input.taxRate) || 0);
     const discPct = Math.max(0, Math.min(100, Number(input.discountPercent) || 0));
+    const priceMode = existingInv.gstPriceMode || settings.gstPriceMode || 'exclusive';
 
     let resolvedProductId = input.productId || '';
     let resolvedBarcode = input.barcode?.trim() || '';
+    let resolvedHsn = input.hsnCode?.trim() || '';
     const resolvedUnit = input.unit || 'pcs';
     const resolvedName = input.name.trim();
 
@@ -857,6 +917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (matchedCatalogProd) {
       resolvedBarcode = matchedCatalogProd.barcode;
+      resolvedHsn = resolvedHsn || matchedCatalogProd.hsnCode || '';
       adjustStock(matchedCatalogProd.id, -qty, `Added to ${existingInv.invoiceNumber}`);
     } else if (input.saveToInventory) {
       const openingStock = Math.max(qty, Number(input.initialStock) || 50);
@@ -865,6 +926,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         nameHindi: input.nameHindi?.trim() || '',
         category: input.category?.trim() || 'General',
         barcode: resolvedBarcode || `${Math.floor(10000000 + Math.random() * 90000000)}`,
+        hsnCode: resolvedHsn || undefined,
         costPrice: input.costPrice !== undefined ? Number(input.costPrice) : Math.round(rate * 0.85),
         sellingPrice: rate,
         stock: Math.max(0, openingStock - qty),
@@ -879,25 +941,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const buildLineItem = (lineQty: number, existingDiscountAmt?: number): InvoiceItem => {
-      const gross = lineQty * rate;
-      const itemDiscount =
-        existingDiscountAmt !== undefined
-          ? existingDiscountAmt + (qty * rate * discPct) / 100
-          : (gross * discPct) / 100;
-      const netAfterDiscount = Math.max(0, gross - itemDiscount);
-      const taxAmount = Math.round((netAfterDiscount * taxRate) / 100);
-      const total = netAfterDiscount + taxAmount;
+      const addedDisc = roundCurrency((qty * rate * discPct) / 100);
+      const calc = calculateLineGst({
+        quantity: lineQty,
+        unitPrice: rate,
+        existingDiscountAmount:
+          existingDiscountAmt !== undefined
+            ? roundCurrency(existingDiscountAmt + addedDisc)
+            : undefined,
+        discountPercent: discPct,
+        taxRate,
+        priceMode,
+      });
       return {
         productId: resolvedProductId,
         name: resolvedName,
         barcode: resolvedBarcode,
+        hsnCode: resolvedHsn || undefined,
         unit: resolvedUnit,
         quantity: lineQty,
         unitPrice: rate,
         taxRate,
-        taxAmount,
-        discountAmount: itemDiscount,
-        total,
+        taxAmount: calc.taxAmount,
+        discountAmount: calc.discountAmount,
+        total: calc.total,
       };
     };
 
@@ -924,7 +991,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     soundManager.playScanBeep();
     addNotification({
       title: `Item Added to ${existingInv.invoiceNumber}`,
-      message: `${resolvedName} (×${qty}) added. Updated Bill Total: ₹${updatedInvoice.grandTotal.toLocaleString('en-IN')}`,
+      message: `${resolvedName} (×${qty}, GST ${formatGstRate(taxRate)}) added. Bill Total: ₹${updatedInvoice.grandTotal.toLocaleString('en-IN')}`,
       type: 'sale',
       relatedId: existingInv.id,
     });
@@ -947,6 +1014,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return existingInv;
     }
 
+    const priceMode = existingInv.gstPriceMode || settings.gstPriceMode || 'exclusive';
     const delta = Math.max(0, newQuantity) - targetItem.quantity;
     if (targetItem.productId && !targetItem.productId.startsWith('custom-') && delta !== 0) {
       adjustStock(
@@ -962,23 +1030,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       const perUnitDiscount =
         targetItem.quantity > 0 ? targetItem.discountAmount / targetItem.quantity : 0;
-      const gross = newQuantity * targetItem.unitPrice;
-      const discountAmount = Math.min(gross, perUnitDiscount * newQuantity);
-      const net = gross - discountAmount;
-      const taxAmount = Math.round((net * targetItem.taxRate) / 100);
-      const total = net + taxAmount;
+      const calc = calculateLineGst({
+        quantity: newQuantity,
+        unitPrice: targetItem.unitPrice,
+        existingDiscountAmount: roundCurrency(perUnitDiscount * newQuantity),
+        taxRate: targetItem.taxRate,
+        priceMode,
+      });
       updatedItems = existingInv.items.map((it, idx) =>
         idx === itemIndex
           ? {
               ...it,
               quantity: newQuantity,
-              discountAmount,
-              taxAmount,
-              total,
+              discountAmount: calc.discountAmount,
+              taxAmount: calc.taxAmount,
+              total: calc.total,
             }
           : it
       );
     }
+
+    const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
+    setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    return updatedInvoice;
+  };
+
+  // Update GST slab rate of a specific line item inside an existing active invoice
+  const updateInvoiceItemTaxRate = (
+    invoiceId: string,
+    itemIndex: number,
+    newTaxRate: number
+  ): Invoice | null => {
+    const existingInv = invoices.find(i => i.id === invoiceId);
+    if (!existingInv || existingInv.status !== 'paid') return null;
+    const targetItem = existingInv.items[itemIndex];
+    if (!targetItem) return null;
+
+    const cleanRate = Math.max(0, Math.min(100, Number(newTaxRate) || 0));
+    const priceMode = existingInv.gstPriceMode || settings.gstPriceMode || 'exclusive';
+    const calc = calculateLineGst({
+      quantity: targetItem.quantity,
+      unitPrice: targetItem.unitPrice,
+      existingDiscountAmount: targetItem.discountAmount,
+      taxRate: cleanRate,
+      priceMode,
+    });
+
+    const updatedItems = existingInv.items.map((it, idx) =>
+      idx === itemIndex
+        ? {
+            ...it,
+            taxRate: cleanRate,
+            taxAmount: calc.taxAmount,
+            total: calc.total,
+          }
+        : it
+    );
 
     const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
     setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
@@ -1001,6 +1108,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const invoiceNumber = generateInvoiceNumber(invoices.length);
+    const priceMode = settings.gstPriceMode || 'exclusive';
+    const supplyType = settings.gstSupplyType || 'intrastate';
 
     const builtItems: InvoiceItem[] = params.items.map(input => {
       const qty = Math.max(1, Number(input.quantity) || 1);
@@ -1010,6 +1119,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       let resolvedProductId = input.productId || '';
       let resolvedBarcode = input.barcode?.trim() || '';
+      let resolvedHsn = input.hsnCode?.trim() || '';
       const resolvedUnit = input.unit || 'pcs';
       const resolvedName = input.name.trim();
 
@@ -1019,6 +1129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (matchedCatalogProd) {
         resolvedBarcode = matchedCatalogProd.barcode;
+        resolvedHsn = resolvedHsn || matchedCatalogProd.hsnCode || '';
         adjustStock(matchedCatalogProd.id, -qty, `Sold in ${invoiceNumber}`);
       } else if (input.saveToInventory) {
         const openingStock = Math.max(qty, Number(input.initialStock) || 50);
@@ -1027,6 +1138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nameHindi: input.nameHindi?.trim() || '',
           category: input.category?.trim() || 'General',
           barcode: resolvedBarcode || `${Math.floor(10000000 + Math.random() * 90000000)}`,
+          hsnCode: resolvedHsn || undefined,
           costPrice: input.costPrice !== undefined ? Number(input.costPrice) : Math.round(rate * 0.85),
           sellingPrice: rate,
           stock: Math.max(0, openingStock - qty),
@@ -1040,32 +1152,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resolvedProductId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       }
 
-      const gross = qty * rate;
-      const discountAmount = (gross * discPct) / 100;
-      const net = gross - discountAmount;
-      const taxAmount = Math.round((net * taxRate) / 100);
-      const total = net + taxAmount;
+      const calc = calculateLineGst({
+        quantity: qty,
+        unitPrice: rate,
+        discountPercent: discPct,
+        taxRate,
+        priceMode,
+      });
 
       return {
         productId: resolvedProductId,
         name: resolvedName,
         barcode: resolvedBarcode,
+        hsnCode: resolvedHsn || undefined,
         unit: resolvedUnit,
         quantity: qty,
         unitPrice: rate,
         taxRate,
-        taxAmount,
-        discountAmount,
-        total,
+        taxAmount: calc.taxAmount,
+        discountAmount: calc.discountAmount,
+        total: calc.total,
       };
     });
 
-    const subtotal = builtItems.reduce((s, it) => s + it.quantity * it.unitPrice, 0);
-    const itemDiscounts = builtItems.reduce((s, it) => s + it.discountAmount, 0);
-    const overallDiscount = (subtotal * (params.discountPercent || 0)) / 100;
-    const discountTotal = itemDiscounts + overallDiscount;
-    const taxTotal = builtItems.reduce((s, it) => s + it.taxAmount, 0);
-    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+    const subtotal = roundCurrency(
+      builtItems.reduce(
+        (s, it) => s + Math.max(0, it.total - it.taxAmount + it.discountAmount),
+        0
+      )
+    );
+    const itemDiscounts = roundCurrency(builtItems.reduce((s, it) => s + it.discountAmount, 0));
+    const overallDiscount = roundCurrency((subtotal * (params.discountPercent || 0)) / 100);
+    const discountTotal = roundCurrency(itemDiscounts + overallDiscount);
+    const taxTotal = roundCurrency(builtItems.reduce((s, it) => s + it.taxAmount, 0));
+    const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
 
     const trimmedName = params.customerName?.trim() || '';
     const trimmedPhone = params.customerPhone?.trim() || '';
@@ -1116,6 +1236,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       taxTotal,
       discountTotal,
       grandTotal,
+      gstSupplyType: supplyType,
+      gstPriceMode: priceMode,
       paymentMethod: params.paymentMethod,
       amountTendered: grandTotal,
       changeDue: 0,
@@ -1241,9 +1363,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications([]);
   };
 
-  // Settings
+  // GST Slab Management & Settings
+  const addOrUpdateGstSlab = (params: {
+    rate: number;
+    label?: string;
+    description?: string;
+    setAsDefault?: boolean;
+  }): GstSlabConfig => {
+    const cleanRate = Number(Math.max(0, Math.min(100, Number(params.rate) || 0)).toFixed(3));
+    const currentSlabs = normalizeGstSlabs(settings.gstSlabs);
+    const existing = currentSlabs.find(s => Number(s.rate.toFixed(3)) === cleanRate);
+
+    let resultSlab: GstSlabConfig;
+    let updatedSlabs: GstSlabConfig[];
+
+    if (existing) {
+      resultSlab = {
+        ...existing,
+        enabled: true,
+        label: params.label?.trim() || existing.label,
+        description: params.description?.trim() ?? existing.description,
+      };
+      updatedSlabs = currentSlabs.map(s => (s.id === existing.id ? resultSlab : s));
+    } else {
+      resultSlab = {
+        id: `gst-custom-${cleanRate}-${Date.now()}`,
+        rate: cleanRate,
+        label: params.label?.trim() || `GST ${formatGstRate(cleanRate)}`,
+        description:
+          params.description?.trim() ||
+          `Custom Slab (CGST ${Number((cleanRate / 2).toFixed(3))}% + SGST ${Number(
+            (cleanRate / 2).toFixed(3)
+          )}%)`,
+        enabled: true,
+        isCustom: true,
+      };
+      updatedSlabs = normalizeGstSlabs([...currentSlabs, resultSlab]);
+    }
+
+    setSettings(prev => ({
+      ...prev,
+      gstSlabs: updatedSlabs,
+      defaultTaxRate: params.setAsDefault ? cleanRate : prev.defaultTaxRate,
+    }));
+
+    return resultSlab;
+  };
+
+  const toggleGstSlab = (slabId: string) => {
+    setSettings(prev => {
+      const currentSlabs = normalizeGstSlabs(prev.gstSlabs);
+      const enabledCount = currentSlabs.filter(s => s.enabled).length;
+      const updated = currentSlabs.map(s => {
+        if (s.id !== slabId) return s;
+        if (s.enabled && enabledCount <= 1) return s; // keep at least 1 active slab
+        return { ...s, enabled: !s.enabled };
+      });
+      return { ...prev, gstSlabs: updated };
+    });
+  };
+
+  const deleteGstSlab = (slabId: string) => {
+    setSettings(prev => {
+      const currentSlabs = normalizeGstSlabs(prev.gstSlabs);
+      if (currentSlabs.length <= 1) return prev;
+      const updated = currentSlabs.filter(s => s.id !== slabId);
+      const activeRates = updated.filter(s => s.enabled).map(s => s.rate);
+      const nextDefault = activeRates.includes(prev.defaultTaxRate)
+        ? prev.defaultTaxRate
+        : (activeRates[0] ?? updated[0].rate);
+      return {
+        ...prev,
+        gstSlabs: updated,
+        defaultTaxRate: nextDefault,
+      };
+    });
+  };
+
+  const resetGstSlabsToDefault = () => {
+    setSettings(prev => ({
+      ...prev,
+      gstSlabs: DEFAULT_GST_SLABS,
+      defaultTaxRate: 5,
+    }));
+  };
+
   const updateSettings = (newSettings: StoreSettings) => {
-    setSettings(newSettings);
+    setSettings({
+      ...newSettings,
+      gstSlabs: normalizeGstSlabs(newSettings.gstSlabs),
+    });
   };
 
   // Clean / Wipe all store data back to zero
@@ -1705,12 +1914,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeFromCart,
         updateCartQuantity,
         updateCartDiscount,
+        updateCartTaxRate,
+        applyGstSlabToCart,
         clearCart,
         checkout,
         addItemToInvoice,
         updateInvoiceItemQuantity,
+        updateInvoiceItemTaxRate,
         createDirectInvoice,
         cancelOrRefundInvoice,
+        addOrUpdateGstSlab,
+        toggleGstSlab,
+        deleteGstSlab,
+        resetGstSlabsToDefault,
         updateSettings,
         markNotificationRead,
         clearNotifications,

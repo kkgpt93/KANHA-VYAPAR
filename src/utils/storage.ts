@@ -1,4 +1,5 @@
 import { Product, Invoice, User, NotificationItem, StoreSettings, Customer } from '../types';
+import { DEFAULT_GST_SLABS, normalizeGstSlabs } from './gst';
 
 export const STORAGE_KEYS = {
   PRODUCTS: 'vyaparpos_products_v2',
@@ -65,6 +66,9 @@ export const CLEAN_DEFAULT_SETTINGS: StoreSettings = {
   soundEnabled: true,
   autoPrintReceipt: false,
   defaultTaxRate: 5,
+  gstSlabs: DEFAULT_GST_SLABS,
+  gstSupplyType: 'intrastate',
+  gstPriceMode: 'exclusive',
 };
 
 export const StorageService = {
@@ -165,6 +169,9 @@ export const StorageService = {
         return {
           ...CLEAN_DEFAULT_SETTINGS,
           ...parsed,
+          gstSlabs: normalizeGstSlabs(parsed.gstSlabs),
+          gstSupplyType: parsed.gstSupplyType === 'interstate' ? 'interstate' : 'intrastate',
+          gstPriceMode: parsed.gstPriceMode === 'inclusive' ? 'inclusive' : 'exclusive',
           social: {
             ...CLEAN_DEFAULT_SETTINGS.social,
             ...(parsed.social || {}),

@@ -13,10 +13,14 @@ import {
   PackageMinus,
   Check,
   X,
+  Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Product } from '../types';
 import { formatCurrency, generateBarcode } from '../utils/formatters';
+import { formatGstRate } from '../utils/gst';
+import { GstSlabPicker } from './GstSlabPicker';
+import { GstSlabManagerModal } from './GstSlabManagerModal';
 
 export const InventoryManagement: React.FC = () => {
   const {
@@ -37,7 +41,9 @@ export const InventoryManagement: React.FC = () => {
 
   // Add / Edit Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSlabManagerOpen, setIsSlabManagerOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Form Fields
   const [name, setName] = useState('');
@@ -45,12 +51,13 @@ export const InventoryManagement: React.FC = () => {
   const [category, setCategory] = useState('Groceries & Staples');
   const [newCategoryName, setNewCategoryName] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [hsnCode, setHsnCode] = useState('');
   const [costPrice, setCostPrice] = useState<number | ''>('');
   const [sellingPrice, setSellingPrice] = useState<number | ''>('');
   const [stock, setStock] = useState<number | ''>('');
   const [minStockAlert, setMinStockAlert] = useState<number | ''>(5);
   const [unit, setUnit] = useState<Product['unit']>('pkt');
-  const [taxRate, setTaxRate] = useState<number>(5);
+  const [taxRate, setTaxRate] = useState<number>(settings.defaultTaxRate ?? 5);
 
   // Quick Stock Adjust Inline Popover
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
@@ -92,12 +99,13 @@ export const InventoryManagement: React.FC = () => {
     setCategory('Groceries & Staples');
     setNewCategoryName('');
     setBarcode(generateBarcode());
+    setHsnCode('');
     setCostPrice('');
     setSellingPrice('');
     setStock('');
     setMinStockAlert(5);
     setUnit('pkt');
-    setTaxRate(5);
+    setTaxRate(settings.defaultTaxRate ?? 5);
     setIsModalOpen(true);
   };
 
@@ -114,6 +122,7 @@ export const InventoryManagement: React.FC = () => {
     setNameHindi(p.nameHindi || '');
     setCategory(p.category);
     setBarcode(p.barcode);
+    setHsnCode(p.hsnCode || '');
     setCostPrice(p.costPrice);
     setSellingPrice(p.sellingPrice);
     setStock(p.stock);
@@ -139,6 +148,7 @@ export const InventoryManagement: React.FC = () => {
         nameHindi: nameHindi.trim() || undefined,
         category: finalCat,
         barcode: barcode.trim(),
+        hsnCode: hsnCode.trim() || undefined,
         costPrice: cp,
         sellingPrice: sp,
         stock: st,
@@ -152,6 +162,7 @@ export const InventoryManagement: React.FC = () => {
         nameHindi: nameHindi.trim() || undefined,
         category: finalCat,
         barcode: barcode.trim(),
+        hsnCode: hsnCode.trim() || undefined,
         costPrice: cp,
         sellingPrice: sp,
         stock: st,
@@ -220,10 +231,19 @@ export const InventoryManagement: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsSlabManagerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/50 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+          >
+            <Percent className="w-3.5 h-3.5" />
+            <span>GST Slabs</span>
+          </button>
+
           <button
             onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Export CSV</span>
@@ -232,7 +252,7 @@ export const InventoryManagement: React.FC = () => {
           {canEdit && (
             <button
               onClick={openAddModal}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors whitespace-nowrap cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Add New Item / Menu</span>
@@ -345,6 +365,12 @@ export const InventoryManagement: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-neutral-500 font-mono mt-0.5">
                           <span>{product.barcode}</span>
+                          {product.hsnCode && (
+                            <>
+                              <span>·</span>
+                              <span>HSN: {product.hsnCode}</span>
+                            </>
+                          )}
                           {product.nameHindi && (
                             <>
                               <span>·</span>
@@ -375,8 +401,8 @@ export const InventoryManagement: React.FC = () => {
                       </td>
 
                       {/* GST */}
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-neutral-500">
-                        {product.taxRate}%
+                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-neutral-600 dark:text-neutral-300 font-medium">
+                        {formatGstRate(product.taxRate)}
                       </td>
 
                       {/* Stock Level */}
@@ -475,28 +501,46 @@ export const InventoryManagement: React.FC = () => {
 
                       {/* Actions: Edit & Delete */}
                       <td className="py-2.5 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            disabled={!canEdit}
-                            onClick={() => openEditModal(product)}
-                            className="p-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40"
-                            title="Edit Product"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            disabled={!canEdit}
-                            onClick={() => {
-                              if (confirm(`Delete ${product.name}?`)) {
+                        {confirmDeleteId === product.id ? (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
                                 deleteProduct(product.id);
-                              }
-                            }}
-                            className="p-1 text-neutral-400 hover:text-rose-600 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                                setConfirmDeleteId(null);
+                              }}
+                              className="px-2 py-0.5 rounded bg-rose-600 text-white text-[10px] font-semibold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-1.5 py-0.5 rounded border border-neutral-300 dark:border-neutral-700 text-[10px] text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              disabled={!canEdit}
+                              onClick={() => openEditModal(product)}
+                              className="p-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 cursor-pointer"
+                              title="Edit Product"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              disabled={!canEdit}
+                              onClick={() => setConfirmDeleteId(product.id)}
+                              className="p-1 text-neutral-400 hover:text-rose-600 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -586,28 +630,43 @@ export const InventoryManagement: React.FC = () => {
                 </div>
               )}
 
-              {/* Barcode & SKU */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                    Barcode / EAN SKU *
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setBarcode(generateBarcode())}
-                    className="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium"
-                  >
-                    Generate Random Barcode
-                  </button>
+              {/* Barcode, SKU & HSN */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2 space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                      Barcode / EAN SKU *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setBarcode(generateBarcode())}
+                      className="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium cursor-pointer"
+                    >
+                      Generate Random
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={barcode}
+                    onChange={e => setBarcode(e.target.value)}
+                    placeholder="890..."
+                    className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 font-mono focus:outline-hidden focus:border-emerald-500"
+                  />
                 </div>
-                <input
-                  type="text"
-                  required
-                  value={barcode}
-                  onChange={e => setBarcode(e.target.value)}
-                  placeholder="890..."
-                  className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 font-mono focus:outline-hidden focus:border-emerald-500"
-                />
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    HSN / SAC Code
+                  </label>
+                  <input
+                    type="text"
+                    value={hsnCode}
+                    onChange={e => setHsnCode(e.target.value)}
+                    placeholder="e.g. 1901"
+                    className="w-full px-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 font-mono focus:outline-hidden focus:border-emerald-500"
+                  />
+                </div>
               </div>
 
               {/* Prices */}
@@ -618,7 +677,7 @@ export const InventoryManagement: React.FC = () => {
                   </label>
                   <input
                     type="number"
-                    step="0.5"
+                    step="0.01"
                     value={costPrice}
                     onChange={e => setCostPrice(e.target.value ? Number(e.target.value) : '')}
                     placeholder="120"
@@ -632,7 +691,7 @@ export const InventoryManagement: React.FC = () => {
                   <input
                     type="number"
                     required
-                    step="0.5"
+                    step="0.01"
                     value={sellingPrice}
                     onChange={e => setSellingPrice(e.target.value ? Number(e.target.value) : '')}
                     placeholder="150"
@@ -641,8 +700,8 @@ export const InventoryManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Stock, Low Alert, Unit & Tax */}
-              <div className="grid grid-cols-4 gap-2">
+              {/* Stock, Low Alert & Unit */}
+              <div className="grid grid-cols-3 gap-2.5">
                 <div className="space-y-1">
                   <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
                     Current Stock *
@@ -653,7 +712,7 @@ export const InventoryManagement: React.FC = () => {
                     value={stock}
                     onChange={e => setStock(e.target.value ? Number(e.target.value) : '')}
                     placeholder="25"
-                    className="w-full px-2 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono focus:outline-hidden"
+                    className="w-full px-2.5 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono focus:outline-hidden"
                   />
                 </div>
                 <div className="space-y-1">
@@ -664,7 +723,7 @@ export const InventoryManagement: React.FC = () => {
                     type="number"
                     value={minStockAlert}
                     onChange={e => setMinStockAlert(e.target.value ? Number(e.target.value) : '')}
-                    className="w-full px-2 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono focus:outline-hidden"
+                    className="w-full px-2.5 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono focus:outline-hidden"
                   />
                 </div>
                 <div className="space-y-1">
@@ -674,44 +733,35 @@ export const InventoryManagement: React.FC = () => {
                   <select
                     value={unit}
                     onChange={e => setUnit(e.target.value as Product['unit'])}
-                    className="w-full px-2 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden"
+                    className="w-full px-2.5 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:outline-hidden"
                   >
                     <option value="pkt">pkt</option>
                     <option value="pcs">pcs</option>
                     <option value="kg">kg</option>
+                    <option value="g">g</option>
                     <option value="ltr">ltr</option>
+                    <option value="ml">ml</option>
                     <option value="box">box</option>
                   </select>
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
-                    GST %
-                  </label>
-                  <select
-                    value={taxRate}
-                    onChange={e => setTaxRate(Number(e.target.value))}
-                    className="w-full px-2 py-1.5 text-xs bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg font-mono focus:outline-hidden"
-                  >
-                    <option value={0}>0%</option>
-                    <option value={5}>5%</option>
-                    <option value={12}>12%</option>
-                    <option value={18}>18%</option>
-                    <option value={28}>28%</option>
-                  </select>
-                </div>
+              </div>
+
+              {/* Multi-Slab & Custom GST Picker */}
+              <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-800">
+                <GstSlabPicker value={taxRate} onChange={setTaxRate} />
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
+                  className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors cursor-pointer"
                 >
                   {editingProduct ? 'Update Product' : 'Save to Inventory'}
                 </button>
@@ -720,6 +770,11 @@ export const InventoryManagement: React.FC = () => {
           </div>
         </div>
       )}
+
+      <GstSlabManagerModal
+        isOpen={isSlabManagerOpen}
+        onClose={() => setIsSlabManagerOpen(false)}
+      />
     </div>
   );
 };

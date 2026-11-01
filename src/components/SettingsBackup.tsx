@@ -23,6 +23,7 @@ import { useApp } from '../context/AppContext';
 import { StoreSettings } from '../types';
 import { formatDate } from '../utils/formatters';
 import { COLOR_THEMES } from '../utils/themes';
+import { GstSlabManagerPanel } from './GstSlabManagerModal';
 
 export const SettingsBackup: React.FC = () => {
   const {
@@ -287,6 +288,11 @@ export const SettingsBackup: React.FC = () => {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Multi-Slab & Custom GST Configuration Card */}
+        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs">
+          <GstSlabManagerPanel />
         </div>
 
         {/* Store Settings Form */}

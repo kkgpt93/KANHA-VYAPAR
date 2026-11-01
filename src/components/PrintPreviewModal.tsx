@@ -14,11 +14,18 @@ import {
   Minus,
   Trash2,
   Pencil,
+  Percent,
 } from 'lucide-react';
 import { Invoice } from '../types';
 import { useApp } from '../context/AppContext';
 import { formatDateTime, buildWhatsAppInvoiceText } from '../utils/formatters';
+import {
+  computeInvoiceSlabBreakup,
+  formatGstRate,
+  getEnabledGstSlabs,
+} from '../utils/gst';
 import { AddInvoiceItemModal } from './AddInvoiceItemModal';
+import { GstSlabManagerModal } from './GstSlabManagerModal';
 
 export type ReceiptFormat = 'thermal80' | 'tax_invoice' | 'thermal58';
 
@@ -39,14 +46,20 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   onClose,
   onCompleteSale,
 }) => {
-  const { settings, invoices, updateInvoiceItemQuantity } = useApp();
+  const {
+    settings,
+    invoices,
+    updateInvoiceItemQuantity,
+    updateInvoiceItemTaxRate,
+  } = useApp();
   const [upiQrUrl, setUpiQrUrl] = useState<string>('');
   const [format, setFormat] = useState<ReceiptFormat>('thermal80');
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [copied, setCopied] = useState(false);
 
-  // Add Item & Edit Item Qty states
+  // Add Item, Edit Item Qty/GST & Slab Manager states
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [isSlabManagerOpen, setIsSlabManagerOpen] = useState(false);
   const [isEditingItems, setIsEditingItems] = useState(false);
 
   // Customization toggles
@@ -99,7 +112,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     if (!liveInvoice && !isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isAddItemModalOpen) return;
+      if (isAddItemModalOpen || isSlabManagerOpen) return;
       if (e.key === 'Escape') {
         onClose();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
@@ -110,13 +123,25 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [liveInvoice, isOpen, isAddItemModalOpen, onClose]);
+  }, [liveInvoice, isOpen, isAddItemModalOpen, isSlabManagerOpen, onClose]);
+
+  const enabledSlabs = useMemo(
+    () => getEnabledGstSlabs(settings.gstSlabs),
+    [settings.gstSlabs]
+  );
+
+  const slabBreakup = useMemo(
+    () => (liveInvoice ? computeInvoiceSlabBreakup(liveInvoice.items) : []),
+    [liveInvoice]
+  );
 
   if (!liveInvoice && !isOpen) return null;
   if (!liveInvoice) return null;
 
   const invoiceData = liveInvoice;
   const canModifyInvoice = invoiceData.status === 'paid';
+  const isInterstate =
+    (invoiceData.gstSupplyType || settings.gstSupplyType || 'intrastate') === 'interstate';
 
   const handlePrint = () => {
     window.print();
@@ -129,7 +154,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     const url = cleanPhone
       ? `https://wa.me/${cleanPhone}?text=${text}`
       : `https://wa.me/?text=${text}`;
-    window.open(url, '_blank');
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleCopySummary = () => {
@@ -198,17 +229,28 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* + Add Item Primary Action inside Invoice Header */}
+            {/* + Add Item & GST Slabs Actions inside Invoice Header */}
             {canModifyInvoice && (
-              <button
-                type="button"
-                onClick={() => setIsAddItemModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                title="Add Item to Invoice (इनवॉइस में आइटम जोड़ें)"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Add Item</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setIsAddItemModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  title="Add Item to Invoice (इनवॉइस में आइटम जोड़ें)"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add Item</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsSlabManagerOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  title="Manage Custom & All GST Slabs"
+                >
+                  <Percent className="w-3.5 h-3.5" />
+                  <span>GST Slabs</span>
+                </button>
+              </>
             )}
 
             {/* Format Selector Segmented Control */}
@@ -472,70 +514,137 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     </div>
 
                     <div className="divide-y divide-neutral-200 py-1 space-y-1">
-                      {invoiceData.items.map((item, idx) => (
-                        <div key={idx} className="pt-1">
-                          <div className="grid grid-cols-12 text-[11px]">
-                            <div className="col-span-6 pr-1">
-                              <p className="font-semibold text-neutral-900 leading-tight truncate">
-                                {item.name}
-                              </p>
-                              {showTaxBreakup && item.taxRate > 0 && (
-                                <p className="text-[9px] text-neutral-500">GST {item.taxRate}%</p>
-                              )}
-                            </div>
-                            <span className="col-span-2 text-center tabular-nums font-mono">
-                              {item.quantity}
-                            </span>
-                            <span className="col-span-2 text-right tabular-nums font-mono">
-                              ₹{item.unitPrice.toFixed(0)}
-                            </span>
-                            <span className="col-span-2 text-right font-bold tabular-nums font-mono">
-                              ₹{item.total.toFixed(0)}
-                            </span>
-                          </div>
+                      {invoiceData.items.map((item, idx) => {
+                        const rowSlabs = enabledSlabs.some(s => s.rate === item.taxRate)
+                          ? enabledSlabs
+                          : [
+                              ...enabledSlabs,
+                              {
+                                id: `inv-line-${item.taxRate}`,
+                                rate: item.taxRate,
+                                label: `GST ${formatGstRate(item.taxRate)}`,
+                                enabled: true,
+                              },
+                            ].sort((a, b) => a.rate - b.rate);
 
-                          {/* Optional inline quantity adjustment controls (no-print) */}
-                          {!isDraft && canModifyInvoice && isEditingItems && (
-                            <div className="no-print mt-1 pb-0.5 flex items-center justify-end gap-1.5 text-[10px] font-sans">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity - 1)
-                                }
-                                disabled={item.quantity <= 1 && invoiceData.items.length <= 1}
-                                className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 disabled:opacity-40 cursor-pointer"
-                              >
-                                -
-                              </button>
-                              <span className="font-mono font-semibold text-neutral-700">
-                                Qty: {item.quantity}
+                        return (
+                          <div key={idx} className="pt-1">
+                            <div className="grid grid-cols-12 text-[11px]">
+                              <div className="col-span-6 pr-1">
+                                <p className="font-semibold text-neutral-900 leading-tight truncate">
+                                  {item.name}
+                                </p>
+                                {showTaxBreakup && (
+                                  <p className="text-[9px] text-neutral-500 font-mono">
+                                    GST {formatGstRate(item.taxRate)}
+                                    {item.hsnCode ? ` · HSN ${item.hsnCode}` : ''}
+                                  </p>
+                                )}
+                              </div>
+                              <span className="col-span-2 text-center tabular-nums font-mono">
+                                {item.quantity}
                               </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity + 1)
-                                }
-                                className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 cursor-pointer"
-                              >
-                                +
-                              </button>
-                              {invoiceData.items.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => updateInvoiceItemQuantity(invoiceData.id, idx, 0)}
-                                  className="px-1.5 py-0.5 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
-                                  title="Remove item from invoice"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              )}
+                              <span className="col-span-2 text-right tabular-nums font-mono">
+                                ₹{item.unitPrice.toFixed(0)}
+                              </span>
+                              <span className="col-span-2 text-right font-bold tabular-nums font-mono">
+                                ₹{item.total.toFixed(2)}
+                              </span>
                             </div>
-                          )}
-                        </div>
-                      ))}
+
+                            {/* Optional inline quantity & GST slab adjustment controls (no-print) */}
+                            {!isDraft && canModifyInvoice && isEditingItems && (
+                              <div className="no-print mt-1 pb-0.5 flex flex-wrap items-center justify-between gap-1 text-[10px] font-sans">
+                                <div className="flex items-center gap-1">
+                                  <select
+                                    value={item.taxRate}
+                                    onChange={e =>
+                                      updateInvoiceItemTaxRate(
+                                        invoiceData.id,
+                                        idx,
+                                        Number(e.target.value)
+                                      )
+                                    }
+                                    className="px-1 py-0.5 rounded border border-neutral-300 bg-white font-mono text-[10px] text-neutral-800"
+                                    title="Select GST Slab"
+                                  >
+                                    {rowSlabs.map(s => (
+                                      <option key={s.id} value={s.rate}>
+                                        GST {formatGstRate(s.rate)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.01"
+                                    value={item.taxRate}
+                                    onChange={e =>
+                                      updateInvoiceItemTaxRate(
+                                        invoiceData.id,
+                                        idx,
+                                        Number(e.target.value) || 0
+                                      )
+                                    }
+                                    className="w-12 px-1 py-0.5 rounded border border-neutral-300 bg-white font-mono text-right text-[10px] text-neutral-900"
+                                    title="Custom GST %"
+                                  />
+                                  <span className="font-mono text-neutral-500">%</span>
+                                </div>
+
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateInvoiceItemQuantity(
+                                        invoiceData.id,
+                                        idx,
+                                        item.quantity - 1
+                                      )
+                                    }
+                                    disabled={item.quantity <= 1 && invoiceData.items.length <= 1}
+                                    className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 disabled:opacity-40 cursor-pointer"
+                                  >
+                                    -
+                                  </button>
+                                  <span className="font-mono font-semibold text-neutral-700">
+                                    {item.quantity}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateInvoiceItemQuantity(
+                                        invoiceData.id,
+                                        idx,
+                                        item.quantity + 1
+                                      )
+                                    }
+                                    className="px-1.5 py-0.5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 cursor-pointer"
+                                  >
+                                    +
+                                  </button>
+                                  {invoiceData.items.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateInvoiceItemQuantity(invoiceData.id, idx, 0)
+                                      }
+                                      className="px-1.5 py-0.5 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                                      title="Remove item from invoice"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
 
-                    {/* Inline + Add Item Button inside Thermal Invoice (no-print) */}
+                    {/* Inline + Add Item & Edit Qty/GST Button inside Thermal Invoice (no-print) */}
                     {canModifyInvoice && (
                       <div className="no-print mt-2 pt-2 border-t border-dotted border-neutral-300 flex items-center justify-between gap-1.5 font-sans">
                         <button
@@ -544,7 +653,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                           className="flex-1 py-1.5 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>+ Add Item (आइटम जोड़ें)</span>
+                          <span>+ Add Item</span>
                         </button>
                         {!isDraft && (
                           <button
@@ -557,7 +666,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                             }`}
                           >
                             <Pencil className="w-3 h-3" />
-                            <span>{isEditingItems ? 'Done' : 'Edit Qty'}</span>
+                            <span>{isEditingItems ? 'Done' : 'Edit Qty / GST'}</span>
                           </button>
                         )}
                       </div>
@@ -567,7 +676,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   {/* Calculation Breakdown */}
                   <div className="py-2.5 border-b border-dashed border-neutral-400 space-y-1 text-[11px]">
                     <div className="flex justify-between text-neutral-600">
-                      <span>Subtotal ({invoiceData.items.length} items):</span>
+                      <span>Taxable Subtotal ({invoiceData.items.length} items):</span>
                       <span className="tabular-nums font-mono">₹{invoiceData.subtotal.toFixed(2)}</span>
                     </div>
 
@@ -578,10 +687,64 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                       </div>
                     )}
 
-                    {showTaxBreakup && invoiceData.taxTotal > 0 && (
+                    {showTaxBreakup && (
                       <div className="flex justify-between text-neutral-600">
-                        <span>GST / Tax Total:</span>
+                        <span>
+                          GST Total ({isInterstate ? 'IGST' : 'CGST + SGST'}):
+                        </span>
                         <span className="tabular-nums font-mono">₹{invoiceData.taxTotal.toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    {/* Slab-Wise GST Breakup Table on Thermal Receipt */}
+                    {showTaxBreakup && slabBreakup.length > 0 && (
+                      <div className="my-1.5 pt-1.5 pb-1 border-t border-dotted border-neutral-300 text-[9px] font-mono tabular-nums">
+                        <div className="font-bold text-neutral-700 mb-0.5 uppercase">
+                          GST Slab Summary:
+                        </div>
+                        {isInterstate ? (
+                          <div className="space-y-0.5">
+                            <div className="grid grid-cols-12 text-neutral-500 font-semibold">
+                              <span className="col-span-4">SLAB</span>
+                              <span className="col-span-4 text-right">TAXABLE</span>
+                              <span className="col-span-4 text-right">IGST</span>
+                            </div>
+                            {slabBreakup.map(row => (
+                              <div key={row.rate} className="grid grid-cols-12 text-neutral-800">
+                                <span className="col-span-4">{formatGstRate(row.rate)}</span>
+                                <span className="col-span-4 text-right">
+                                  ₹{row.taxableAmount.toFixed(2)}
+                                </span>
+                                <span className="col-span-4 text-right">
+                                  ₹{row.igstAmount.toFixed(2)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="space-y-0.5">
+                            <div className="grid grid-cols-12 text-neutral-500 font-semibold">
+                              <span className="col-span-3">SLAB</span>
+                              <span className="col-span-3 text-right">TAXBL</span>
+                              <span className="col-span-3 text-right">CGST</span>
+                              <span className="col-span-3 text-right">SGST</span>
+                            </div>
+                            {slabBreakup.map(row => (
+                              <div key={row.rate} className="grid grid-cols-12 text-neutral-800">
+                                <span className="col-span-3">{formatGstRate(row.rate)}</span>
+                                <span className="col-span-3 text-right">
+                                  {row.taxableAmount.toFixed(1)}
+                                </span>
+                                <span className="col-span-3 text-right">
+                                  {row.cgstAmount.toFixed(2)}
+                                </span>
+                                <span className="col-span-3 text-right">
+                                  {row.sgstAmount.toFixed(2)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -784,78 +947,146 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-neutral-200">
-                        {invoiceData.items.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-neutral-50">
-                            <td className="p-2 border-r border-neutral-200 text-center text-neutral-500">
-                              {idx + 1}
-                            </td>
-                            <td className="p-2 border-r border-neutral-200">
-                              <div className="flex items-center justify-between gap-2">
-                                <div>
-                                  <span className="font-bold text-neutral-900 block">{item.name}</span>
-                                  {item.barcode && (
-                                    <span className="text-[10px] text-neutral-500 font-mono">
-                                      SKU: {item.barcode}
+                        {invoiceData.items.map((item, idx) => {
+                          const rowSlabs = enabledSlabs.some(s => s.rate === item.taxRate)
+                            ? enabledSlabs
+                            : [
+                                ...enabledSlabs,
+                                {
+                                  id: `a4-line-${item.taxRate}`,
+                                  rate: item.taxRate,
+                                  label: `GST ${formatGstRate(item.taxRate)}`,
+                                  enabled: true,
+                                },
+                              ].sort((a, b) => a.rate - b.rate);
+
+                          return (
+                            <tr key={idx} className="hover:bg-neutral-50">
+                              <td className="p-2 border-r border-neutral-200 text-center text-neutral-500">
+                                {idx + 1}
+                              </td>
+                              <td className="p-2 border-r border-neutral-200">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <span className="font-bold text-neutral-900 block">
+                                      {item.name}
                                     </span>
-                                  )}
+                                    <span className="text-[10px] text-neutral-500 font-mono">
+                                      {item.barcode ? `SKU: ${item.barcode}` : ''}
+                                      {item.barcode && item.hsnCode ? ' · ' : ''}
+                                      {item.hsnCode ? `HSN: ${item.hsnCode}` : ''}
+                                    </span>
+                                  </div>
+                                  {!isDraft &&
+                                    canModifyInvoice &&
+                                    isEditingItems &&
+                                    invoiceData.items.length > 1 && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateInvoiceItemQuantity(invoiceData.id, idx, 0)
+                                        }
+                                        className="no-print p-1 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                                        title="Remove item"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                 </div>
-                                {!isDraft && canModifyInvoice && isEditingItems && invoiceData.items.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => updateInvoiceItemQuantity(invoiceData.id, idx, 0)}
-                                    className="no-print p-1 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
-                                    title="Remove item"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                              </td>
+                              <td className="p-2 border-r border-neutral-200 text-center text-neutral-600">
+                                {item.unit || 'pcs'}
+                              </td>
+                              <td className="p-2 border-r border-neutral-200 text-center font-mono font-bold tabular-nums">
+                                {!isDraft && canModifyInvoice && isEditingItems ? (
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateInvoiceItemQuantity(
+                                          invoiceData.id,
+                                          idx,
+                                          item.quantity - 1
+                                        )
+                                      }
+                                      disabled={
+                                        item.quantity <= 1 && invoiceData.items.length <= 1
+                                      }
+                                      className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 disabled:opacity-40 cursor-pointer"
+                                    >
+                                      <Minus className="w-2.5 h-2.5" />
+                                    </button>
+                                    <span>{item.quantity}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateInvoiceItemQuantity(
+                                          invoiceData.id,
+                                          idx,
+                                          item.quantity + 1
+                                        )
+                                      }
+                                      className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 cursor-pointer"
+                                    >
+                                      <Plus className="w-2.5 h-2.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  item.quantity
                                 )}
-                              </div>
-                            </td>
-                            <td className="p-2 border-r border-neutral-200 text-center text-neutral-600">
-                              {item.unit || 'pcs'}
-                            </td>
-                            <td className="p-2 border-r border-neutral-200 text-center font-mono font-bold">
-                              {!isDraft && canModifyInvoice && isEditingItems ? (
-                                <div className="flex items-center justify-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity - 1)
-                                    }
-                                    disabled={item.quantity <= 1 && invoiceData.items.length <= 1}
-                                    className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 disabled:opacity-40 cursor-pointer"
-                                  >
-                                    <Minus className="w-2.5 h-2.5" />
-                                  </button>
-                                  <span>{item.quantity}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      updateInvoiceItemQuantity(invoiceData.id, idx, item.quantity + 1)
-                                    }
-                                    className="no-print w-5 h-5 rounded border border-neutral-300 bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center text-neutral-700 cursor-pointer"
-                                  >
-                                    <Plus className="w-2.5 h-2.5" />
-                                  </button>
-                                </div>
-                              ) : (
-                                item.quantity
-                              )}
-                            </td>
-                            <td className="p-2 border-r border-neutral-200 text-right font-mono">
-                              {item.unitPrice.toFixed(2)}
-                            </td>
-                            <td className="p-2 border-r border-neutral-200 text-center font-mono">
-                              {item.taxRate}%
-                            </td>
-                            <td className="p-2 border-r border-neutral-200 text-right font-mono text-neutral-600">
-                              {item.taxAmount.toFixed(2)}
-                            </td>
-                            <td className="p-2 text-right font-mono font-bold text-neutral-900">
-                              {item.total.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
+                              </td>
+                              <td className="p-2 border-r border-neutral-200 text-right font-mono tabular-nums">
+                                {item.unitPrice.toFixed(2)}
+                              </td>
+                              <td className="p-2 border-r border-neutral-200 text-center font-mono tabular-nums">
+                                {!isDraft && canModifyInvoice && isEditingItems ? (
+                                  <div className="no-print flex flex-col items-center gap-1">
+                                    <select
+                                      value={item.taxRate}
+                                      onChange={e =>
+                                        updateInvoiceItemTaxRate(
+                                          invoiceData.id,
+                                          idx,
+                                          Number(e.target.value)
+                                        )
+                                      }
+                                      className="px-1 py-0.5 rounded border border-neutral-300 bg-white text-[10px]"
+                                    >
+                                      {rowSlabs.map(s => (
+                                        <option key={s.id} value={s.rate}>
+                                          {formatGstRate(s.rate)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      step="0.01"
+                                      value={item.taxRate}
+                                      onChange={e =>
+                                        updateInvoiceItemTaxRate(
+                                          invoiceData.id,
+                                          idx,
+                                          Number(e.target.value) || 0
+                                        )
+                                      }
+                                      className="w-12 px-1 py-0.5 rounded border border-neutral-300 bg-white text-center text-[10px]"
+                                    />
+                                  </div>
+                                ) : (
+                                  formatGstRate(item.taxRate)
+                                )}
+                              </td>
+                              <td className="p-2 border-r border-neutral-200 text-right font-mono text-neutral-600 tabular-nums">
+                                {item.taxAmount.toFixed(2)}
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-neutral-900 tabular-nums">
+                                {item.total.toFixed(2)}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
 
@@ -882,12 +1113,93 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                             }`}
                           >
                             <Pencil className="w-3.5 h-3.5" />
-                            <span>{isEditingItems ? 'Done Editing Items' : 'Adjust Item Qty / Remove'}</span>
+                            <span>
+                              {isEditingItems
+                                ? 'Done Editing Items & GST'
+                                : 'Edit Qty / GST Slab'}
+                            </span>
                           </button>
                         )}
                       </div>
                     )}
                   </div>
+
+                  {/* Formal Slab-Wise GST Tax Summary Table (CGST + SGST or IGST) */}
+                  {showTaxBreakup && slabBreakup.length > 0 && (
+                    <div className="border border-neutral-300 rounded-xs overflow-hidden">
+                      <div className="px-2.5 py-1.5 bg-neutral-100 border-b border-neutral-300 text-[10px] font-bold uppercase text-neutral-700 flex justify-between">
+                        <span>
+                          GST Slab-Wise Tax Breakup ({isInterstate ? 'Inter-State IGST' : 'Intra-State CGST + SGST'})
+                        </span>
+                        <span className="font-mono">
+                          Total GST: ₹{invoiceData.taxTotal.toFixed(2)}
+                        </span>
+                      </div>
+                      <table className="w-full text-left text-[11px] font-mono tabular-nums border-collapse">
+                        <thead>
+                          <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-600 font-sans font-semibold">
+                            <th className="p-1.5 border-r border-neutral-200">GST Slab</th>
+                            <th className="p-1.5 border-r border-neutral-200 text-right">
+                              Taxable Value (₹)
+                            </th>
+                            {isInterstate ? (
+                              <th className="p-1.5 border-r border-neutral-200 text-right">
+                                IGST (Rate & Amt)
+                              </th>
+                            ) : (
+                              <>
+                                <th className="p-1.5 border-r border-neutral-200 text-right">
+                                  CGST (Rate & Amt)
+                                </th>
+                                <th className="p-1.5 border-r border-neutral-200 text-right">
+                                  SGST (Rate & Amt)
+                                </th>
+                              </>
+                            )}
+                            <th className="p-1.5 text-right">Total Tax (₹)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-neutral-200">
+                          {slabBreakup.map(row => (
+                            <tr key={row.rate}>
+                              <td className="p-1.5 border-r border-neutral-200 font-bold text-neutral-900">
+                                GST {formatGstRate(row.rate)}
+                              </td>
+                              <td className="p-1.5 border-r border-neutral-200 text-right">
+                                {row.taxableAmount.toFixed(2)}
+                              </td>
+                              {isInterstate ? (
+                                <td className="p-1.5 border-r border-neutral-200 text-right">
+                                  <span className="text-neutral-500 text-[10px] mr-1.5">
+                                    @{row.igstRate}%
+                                  </span>
+                                  <span>{row.igstAmount.toFixed(2)}</span>
+                                </td>
+                              ) : (
+                                <>
+                                  <td className="p-1.5 border-r border-neutral-200 text-right">
+                                    <span className="text-neutral-500 text-[10px] mr-1.5">
+                                      @{row.cgstRate}%
+                                    </span>
+                                    <span>{row.cgstAmount.toFixed(2)}</span>
+                                  </td>
+                                  <td className="p-1.5 border-r border-neutral-200 text-right">
+                                    <span className="text-neutral-500 text-[10px] mr-1.5">
+                                      @{row.sgstRate}%
+                                    </span>
+                                    <span>{row.sgstAmount.toFixed(2)}</span>
+                                  </td>
+                                </>
+                              )}
+                              <td className="p-1.5 text-right font-bold text-neutral-900">
+                                {row.totalTax.toFixed(2)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
                   {/* Summary, Total in Words & Signatory */}
                   <div className="grid grid-cols-12 gap-4 pt-1">
@@ -916,21 +1228,21 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                     <div className="col-span-5 text-xs space-y-1 border border-neutral-300 p-3 rounded-sm bg-neutral-50/50">
                       <div className="flex justify-between text-neutral-600">
                         <span>Taxable Subtotal:</span>
-                        <span className="font-mono font-bold">₹{invoiceData.subtotal.toFixed(2)}</span>
+                        <span className="font-mono font-bold tabular-nums">₹{invoiceData.subtotal.toFixed(2)}</span>
                       </div>
                       {invoiceData.discountTotal > 0 && (
                         <div className="flex justify-between text-neutral-700">
                           <span>Discount Applied:</span>
-                          <span className="font-mono text-rose-600">-₹{invoiceData.discountTotal.toFixed(2)}</span>
+                          <span className="font-mono text-rose-600 tabular-nums">-₹{invoiceData.discountTotal.toFixed(2)}</span>
                         </div>
                       )}
                       <div className="flex justify-between text-neutral-600">
-                        <span>CGST + SGST (Total Tax):</span>
-                        <span className="font-mono">₹{invoiceData.taxTotal.toFixed(2)}</span>
+                        <span>{isInterstate ? 'IGST (Total Tax):' : 'CGST + SGST (Total Tax):'}</span>
+                        <span className="font-mono tabular-nums">₹{invoiceData.taxTotal.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-base font-extrabold text-neutral-900 pt-2 border-t-2 border-neutral-800">
                         <span>TOTAL PAYABLE:</span>
-                        <span className="font-mono">₹{invoiceData.grandTotal.toFixed(2)}</span>
+                        <span className="font-mono tabular-nums">₹{invoiceData.grandTotal.toFixed(2)}</span>
                       </div>
 
                       {/* Cashier / Signatory Placeholder */}
@@ -1013,6 +1325,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         mode={isDraft ? 'cart' : 'existing-invoice'}
         targetInvoice={isDraft ? null : invoiceData}
         onClose={() => setIsAddItemModalOpen(false)}
+      />
+
+      {/* GST Slab Manager Modal */}
+      <GstSlabManagerModal
+        isOpen={isSlabManagerOpen}
+        onClose={() => setIsSlabManagerOpen(false)}
       />
     </div>
   );

@@ -13,10 +13,19 @@ import {
   QrCode,
   CreditCard,
   AlertCircle,
+  Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Invoice, InvoiceItemInput, PaymentMethod, Product } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import {
+  calculateLineGst,
+  formatGstRate,
+  getEnabledGstSlabs,
+  roundCurrency,
+} from '../utils/gst';
+import { GstSlabPicker } from './GstSlabPicker';
+import { GstSlabManagerModal } from './GstSlabManagerModal';
 
 export interface AddInvoiceItemModalProps {
   isOpen: boolean;
@@ -28,7 +37,6 @@ export interface AddInvoiceItemModalProps {
 }
 
 const UNITS: Product['unit'][] = ['pcs', 'kg', 'g', 'ltr', 'ml', 'pkt', 'box'];
-const GST_RATES = [0, 5, 12, 18, 28];
 
 export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
   isOpen,
@@ -53,24 +61,35 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     return invoices.find(i => i.id === targetInvoice.id) || targetInvoice;
   }, [invoices, targetInvoice]);
 
+  const effectivePriceMode =
+    liveTargetInvoice?.gstPriceMode || settings.gstPriceMode || 'exclusive';
+
+  const enabledSlabs = useMemo(
+    () => getEnabledGstSlabs(settings.gstSlabs),
+    [settings.gstSlabs]
+  );
+
   const [entryTab, setEntryTab] = useState<'custom' | 'catalog'>(() =>
     initialItemName || products.length === 0 ? 'custom' : 'catalog'
   );
+  const [isSlabManagerOpen, setIsSlabManagerOpen] = useState(false);
 
   // Custom item fields
   const [itemName, setItemName] = useState(initialItemName);
   const [unitPrice, setUnitPrice] = useState<string>('');
   const [quantity, setQuantity] = useState<number>(1);
   const [unit, setUnit] = useState<Product['unit']>('pcs');
-  const [taxRate, setTaxRate] = useState<number>(settings.defaultTaxRate || 0);
+  const [taxRate, setTaxRate] = useState<number>(settings.defaultTaxRate ?? 0);
+  const [hsnCode, setHsnCode] = useState<string>('');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [saveToInventory, setSaveToInventory] = useState<boolean>(false);
   const [category, setCategory] = useState<string>('General');
   const [initialStock, setInitialStock] = useState<number>(50);
 
-  // Catalog search & per-product quick qty
+  // Catalog search, per-product quick qty & per-product GST slab override
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogQuantities, setCatalogQuantities] = useState<Record<string, number>>({});
+  const [catalogTaxOverrides, setCatalogTaxOverrides] = useState<Record<string, number>>({});
 
   // New-invoice mode draft items & customer fields
   const [draftItems, setDraftItems] = useState<InvoiceItemInput[]>([]);
@@ -85,20 +104,22 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setItemName(initialItemName || '');
+      setTaxRate(settings.defaultTaxRate ?? 0);
       setEntryTab(initialItemName || products.length === 0 ? 'custom' : 'catalog');
       setErrorMsg(null);
       setFeedbackMsg(null);
     }
-  }, [isOpen, initialItemName, products.length]);
+  }, [isOpen, initialItemName, products.length, settings.defaultTaxRate]);
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
+      if (isSlabManagerOpen) return;
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isOpen, onClose]);
+  }, [isOpen, isSlabManagerOpen, onClose]);
 
   const filteredCatalog = useMemo(() => {
     const q = catalogSearch.toLowerCase().trim();
@@ -108,21 +129,28 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
         p.name.toLowerCase().includes(q) ||
         (p.nameHindi && p.nameHindi.toLowerCase().includes(q)) ||
         p.barcode.toLowerCase().includes(q) ||
+        (p.hsnCode && p.hsnCode.toLowerCase().includes(q)) ||
         p.category.toLowerCase().includes(q)
     );
   }, [products, catalogSearch]);
 
-  // Live preview of the custom item form
+  // Live preview of the custom item form using accurate multi-slab GST math
   const customPreview = useMemo(() => {
-    const rate = Math.max(0, Number(unitPrice) || 0);
-    const qty = Math.max(1, Number(quantity) || 1);
-    const gross = rate * qty;
-    const discAmt = (gross * Math.max(0, Math.min(100, discountPercent))) / 100;
-    const net = Math.max(0, gross - discAmt);
-    const taxAmt = Math.round((net * taxRate) / 100);
-    const total = net + taxAmt;
-    return { gross, discAmt, net, taxAmt, total };
-  }, [unitPrice, quantity, discountPercent, taxRate]);
+    const calc = calculateLineGst({
+      quantity: Math.max(1, Number(quantity) || 1),
+      unitPrice: Math.max(0, Number(unitPrice) || 0),
+      discountPercent: Math.max(0, Math.min(100, discountPercent)),
+      taxRate,
+      priceMode: effectivePriceMode,
+    });
+    return {
+      gross: calc.gross,
+      discAmt: calc.discountAmount,
+      taxableValue: calc.taxableValue,
+      taxAmt: calc.taxAmount,
+      total: calc.total,
+    };
+  }, [unitPrice, quantity, discountPercent, taxRate, effectivePriceMode]);
 
   // Draft totals for mode === 'new-invoice'
   const draftTotals = useMemo(() => {
@@ -130,17 +158,20 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     let discountTotal = 0;
     let taxTotal = 0;
     draftItems.forEach(it => {
-      const gross = it.quantity * it.unitPrice;
-      const disc = (gross * (it.discountPercent || 0)) / 100;
-      const net = Math.max(0, gross - disc);
-      const tax = Math.round((net * it.taxRate) / 100);
-      subtotal += gross;
-      discountTotal += disc;
-      taxTotal += tax;
+      const calc = calculateLineGst({
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        discountPercent: it.discountPercent || 0,
+        taxRate: it.taxRate,
+        priceMode: effectivePriceMode,
+      });
+      subtotal = roundCurrency(subtotal + calc.taxableValue + calc.discountAmount);
+      discountTotal = roundCurrency(discountTotal + calc.discountAmount);
+      taxTotal = roundCurrency(taxTotal + calc.taxAmount);
     });
-    const grandTotal = Math.max(0, Math.round(subtotal + taxTotal - discountTotal));
+    const grandTotal = roundCurrency(Math.max(0, subtotal + taxTotal - discountTotal));
     return { subtotal, discountTotal, taxTotal, grandTotal };
-  }, [draftItems]);
+  }, [draftItems, effectivePriceMode]);
 
   if (!isOpen) return null;
 
@@ -155,6 +186,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
   const resetCustomForm = () => {
     setItemName('');
     setUnitPrice('');
+    setHsnCode('');
     setQuantity(1);
     setDiscountPercent(0);
   };
@@ -173,6 +205,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     return {
       name: trimmed,
       category: category.trim() || 'General',
+      hsnCode: hsnCode.trim() || undefined,
       unit,
       quantity: Math.max(1, Number(quantity) || 1),
       unitPrice: numericPrice,
@@ -189,7 +222,9 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
       if (closeAfter) {
         onClose();
       } else {
-        flashFeedback(`"${input.name}" (×${input.quantity}) बिल में जोड़ा गया!`);
+        flashFeedback(
+          `"${input.name}" (×${input.quantity}, GST ${formatGstRate(input.taxRate)}) बिल में जोड़ा गया!`
+        );
         resetCustomForm();
       }
       return;
@@ -209,7 +244,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
         onClose();
       } else {
         flashFeedback(
-          `"${input.name}" (×${input.quantity}) ${updated.invoiceNumber} में जोड़ा गया!`
+          `"${input.name}" (GST ${formatGstRate(input.taxRate)}) ${updated.invoiceNumber} में जोड़ा गया!`
         );
         resetCustomForm();
       }
@@ -232,7 +267,9 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
       }
       return [...prev, input];
     });
-    flashFeedback(`"${input.name}" (×${input.quantity}) इनवॉइस लिस्ट में जोड़ा गया!`);
+    flashFeedback(
+      `"${input.name}" (GST ${formatGstRate(input.taxRate)}) इनवॉइस लिस्ट में जोड़ा गया!`
+    );
     resetCustomForm();
   };
 
@@ -244,14 +281,20 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
 
   const handleAddCatalogProduct = (product: Product, closeAfter = false) => {
     const qty = Math.max(1, catalogQuantities[product.id] || 1);
+    const selectedSlabRate =
+      catalogTaxOverrides[product.id] !== undefined
+        ? catalogTaxOverrides[product.id]
+        : product.taxRate;
+
     const input: InvoiceItemInput = {
       productId: product.id,
       name: product.name,
       barcode: product.barcode,
+      hsnCode: product.hsnCode,
       unit: product.unit,
       quantity: qty,
       unitPrice: product.sellingPrice,
-      taxRate: product.taxRate,
+      taxRate: selectedSlabRate,
       discountPercent: 0,
     };
     dispatchItemAddition(input, closeAfter);
@@ -261,7 +304,6 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
   const handleFinalizeNewInvoice = () => {
     let itemsToCreate = [...draftItems];
 
-    // If user typed a custom item in the form and directly clicked "Generate Invoice", include it automatically
     if (itemName.trim() && unitPrice !== '' && !isNaN(Number(unitPrice))) {
       const pendingItem = buildCustomInput();
       if (pendingItem) {
@@ -294,8 +336,8 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
     mode === 'existing-invoice' && liveTargetInvoice
       ? `Add Item to Invoice · ${liveTargetInvoice.invoiceNumber}`
       : mode === 'new-invoice'
-      ? 'Create Invoice & Add Items (नया इनवॉइस / आइटम जोड़ें)'
-      : 'Add Item to Current Bill (बिल में आइटम जोड़ें)';
+      ? 'Create Invoice & Add Items (नया इनवॉइस / GST बिल बनाएं)'
+      : 'Add Item to Current Bill (बिल में आइटम और GST स्लैब जोड़ें)';
 
   const modalSubtitle =
     mode === 'existing-invoice' && liveTargetInvoice
@@ -304,8 +346,8 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
           0
         )} · Current Total: ${formatCurrency(liveTargetInvoice.grandTotal, settings.currencySymbol)}`
       : mode === 'new-invoice'
-      ? 'इन्वेंटरी से आइटम चुनें या नया कस्टम आइटम लिखकर तुरंत GST बिल बनाएं'
-      : 'इन्वेंटरी से चुनें या बिना कैटलॉग के सीधा नया आइटम बिल में जोड़ें';
+      ? 'किसी भी GST स्लैब (0%, 3%, 5%, 12%, 18%, 28% या कस्टम %) के साथ तुरंत बिल बनाएं'
+      : 'इन्वेंटरी से चुनें या किसी भी कस्टम GST % स्लैब के साथ सीधा आइटम जोड़ें';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-black/70 backdrop-blur-xs overflow-y-auto no-print">
@@ -319,14 +361,25 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
             </h3>
             <p className="text-[11px] text-white/75 mt-0.5 truncate">{modalSubtitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsSlabManagerOpen(true)}
+              className="px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
+              title="Configure All GST Slabs"
+            >
+              <Percent className="w-3.5 h-3.5 brand-gold-text" />
+              <span className="hidden sm:inline">GST Slabs</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+              title="Close (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Interactive Mode Switch Tabs */}
@@ -394,7 +447,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                       setItemName(e.target.value);
                       if (errorMsg) setErrorMsg(null);
                     }}
-                    placeholder="e.g. Basmati Rice 1kg / Loose Sugar"
+                    placeholder="e.g. Basmati Rice 1kg / Gold Ring / Mobile Charger"
                     autoFocus
                     className="w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
                   />
@@ -402,7 +455,9 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
 
                 <div className="sm:col-span-5">
                   <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Rate / Price ({settings.currencySymbol}) *
+                    {effectivePriceMode === 'inclusive'
+                      ? `MRP Incl. GST (${settings.currencySymbol}) *`
+                      : `Rate / Price (${settings.currencySymbol}) *`}
                   </label>
                   <input
                     type="number"
@@ -474,22 +529,18 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                   </select>
                 </div>
 
-                {/* GST % */}
+                {/* HSN / SAC Code */}
                 <div>
                   <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-                    GST / Tax (%)
+                    HSN / SAC (Optional)
                   </label>
-                  <select
-                    value={taxRate}
-                    onChange={e => setTaxRate(Number(e.target.value))}
-                    className="w-full px-2.5 py-2 text-xs sm:text-sm font-mono bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:border-emerald-500"
-                  >
-                    {GST_RATES.map(r => (
-                      <option key={r} value={r}>
-                        GST {r}%
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    value={hsnCode}
+                    onChange={e => setHsnCode(e.target.value)}
+                    placeholder="e.g. 1006"
+                    className="w-full px-3 py-2 text-xs sm:text-sm font-mono bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
+                  />
                 </div>
 
                 {/* Item Discount % */}
@@ -510,6 +561,11 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                 </div>
               </div>
 
+              {/* Multi-Slab & Custom GST Picker */}
+              <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-800">
+                <GstSlabPicker value={taxRate} onChange={setTaxRate} />
+              </div>
+
               {/* Save to Inventory Option */}
               <div className="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-800 space-y-2.5">
                 <label className="inline-flex items-center gap-2 text-xs font-medium text-neutral-800 dark:text-neutral-200 cursor-pointer select-none">
@@ -520,7 +576,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                     className="w-4 h-4 rounded border-neutral-300 text-emerald-600 focus:ring-emerald-500"
                   />
                   <span>
-                    Save this item to Inventory Catalog as well (इस आइटम को इन्वेंटरी में भी सेव करें)
+                    Save this item & GST slab to Inventory Catalog as well (इन्वेंटरी में भी सेव करें)
                   </span>
                 </label>
 
@@ -556,13 +612,15 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
 
               {/* Live Line Summary & Quick Add Action */}
               <div className="p-3 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs text-neutral-700 dark:text-neutral-300 font-mono">
-                  <span>Subtotal: ₹{customPreview.net.toFixed(2)}</span>
+                <div className="text-xs text-neutral-700 dark:text-neutral-300 font-mono tabular-nums">
+                  <span>Taxable: ₹{customPreview.taxableValue.toFixed(2)}</span>
                   <span className="mx-2 text-neutral-400">·</span>
-                  <span>GST: ₹{customPreview.taxAmt.toFixed(2)}</span>
+                  <span>
+                    GST ({formatGstRate(taxRate)}): ₹{customPreview.taxAmt.toFixed(2)}
+                  </span>
                   <span className="mx-2 text-neutral-400">·</span>
                   <strong className="text-sm text-emerald-800 dark:text-emerald-300">
-                    Line Total: {formatCurrency(customPreview.total, settings.currencySymbol)}
+                    Line Total: ₹{customPreview.total.toFixed(2)}
                   </strong>
                 </div>
 
@@ -599,7 +657,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: PICK FROM INVENTORY CATALOG */}
+          {/* TAB 2: PICK FROM INVENTORY CATALOG (WITH PER-ITEM GST SLAB OVERRIDE) */}
           {entryTab === 'catalog' && (
             <div className="space-y-3">
               <div className="relative">
@@ -608,7 +666,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                   type="text"
                   value={catalogSearch}
                   onChange={e => setCatalogSearch(e.target.value)}
-                  placeholder="Search inventory product by name, Hindi, or barcode..."
+                  placeholder="Search inventory product by name, Hindi, HSN, or barcode..."
                   autoFocus
                   className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-hidden focus:border-emerald-500"
                 />
@@ -647,14 +705,30 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                   </button>
                 </div>
               ) : (
-                <div className="max-h-60 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg">
+                <div className="max-h-64 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg">
                   {filteredCatalog.map(prod => {
                     const qty = catalogQuantities[prod.id] || 1;
+                    const activeTax =
+                      catalogTaxOverrides[prod.id] !== undefined
+                        ? catalogTaxOverrides[prod.id]
+                        : prod.taxRate;
                     const outOfStock = prod.stock <= 0;
+                    const slabOptions = enabledSlabs.some(s => s.rate === activeTax)
+                      ? enabledSlabs
+                      : [
+                          ...enabledSlabs,
+                          {
+                            id: `prod-rate-${activeTax}`,
+                            rate: activeTax,
+                            label: `GST ${formatGstRate(activeTax)}`,
+                            enabled: true,
+                          },
+                        ].sort((a, b) => a.rate - b.rate);
+
                     return (
                       <div
                         key={prod.id}
-                        className="p-2.5 px-3 flex items-center justify-between gap-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+                        className="p-2.5 px-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
                       >
                         <div className="min-w-0 flex-1">
                           <div className="text-xs sm:text-sm font-semibold text-neutral-900 dark:text-neutral-100 truncate">
@@ -666,14 +740,37 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                             <span>
                               Stock: {prod.stock} {prod.unit}
                             </span>
-                            <span className="mx-1.5">·</span>
-                            <span>GST {prod.taxRate}%</span>
+                            {prod.hsnCode && (
+                              <>
+                                <span className="mx-1.5">·</span>
+                                <span>HSN: {prod.hsnCode}</span>
+                              </>
+                            )}
                           </div>
                         </div>
 
-                        <div className="text-right font-mono font-bold text-xs sm:text-sm text-neutral-900 dark:text-neutral-100 shrink-0">
+                        <div className="text-right font-mono font-bold text-xs sm:text-sm text-neutral-900 dark:text-neutral-100 shrink-0 tabular-nums">
                           {formatCurrency(prod.sellingPrice, settings.currencySymbol)}
                         </div>
+
+                        {/* Per-row GST Slab Override Selector */}
+                        <select
+                          value={activeTax}
+                          onChange={e =>
+                            setCatalogTaxOverrides(prev => ({
+                              ...prev,
+                              [prod.id]: Number(e.target.value),
+                            }))
+                          }
+                          className="px-2 py-1 text-[11px] font-mono font-semibold bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-md text-neutral-800 dark:text-neutral-200 focus:outline-hidden focus:border-emerald-500 shrink-0"
+                          title="Select GST Slab for this bill"
+                        >
+                          {slabOptions.map(s => (
+                            <option key={s.id} value={s.rate}>
+                              GST {formatGstRate(s.rate)}
+                            </option>
+                          ))}
+                        </select>
 
                         <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-md bg-white dark:bg-neutral-800 shrink-0">
                           <button
@@ -688,7 +785,7 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                           >
                             <Minus className="w-3 h-3" />
                           </button>
-                          <span className="w-7 text-center text-xs font-mono font-semibold text-neutral-900 dark:text-neutral-100">
+                          <span className="w-7 text-center text-xs font-mono font-semibold text-neutral-900 dark:text-neutral-100 tabular-nums">
                             {qty}
                           </span>
                           <button
@@ -726,12 +823,13 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
           {mode === 'new-invoice' && (
             <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                <h4 className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
                   Invoice Items ({draftItems.length})
                 </h4>
                 {draftItems.length > 0 && (
-                  <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                    Total Payable: {formatCurrency(draftTotals.grandTotal, settings.currencySymbol)}
+                  <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                    GST: ₹{draftTotals.taxTotal.toFixed(2)} · Total Payable: ₹
+                    {draftTotals.grandTotal.toFixed(2)}
                   </span>
                 )}
               </div>
@@ -742,60 +840,92 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
                 </p>
               ) : (
                 <div className="max-h-36 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg">
-                  {draftItems.map((it, idx) => (
-                    <div
-                      key={idx}
-                      className="px-3 py-2 flex items-center justify-between gap-2 text-xs"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="font-semibold text-neutral-900 dark:text-neutral-100 truncate block">
-                          {it.name}
-                        </span>
-                        <span className="text-[11px] text-neutral-500 font-mono">
-                          ₹{it.unitPrice} × {it.quantity} {it.unit} · GST {it.taxRate}%
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDraftItems(prev =>
-                              prev.map((row, i) =>
-                                i === idx ? { ...row, quantity: Math.max(1, row.quantity - 1) } : row
+                  {draftItems.map((it, idx) => {
+                    const rowSlabs = enabledSlabs.some(s => s.rate === it.taxRate)
+                      ? enabledSlabs
+                      : [
+                          ...enabledSlabs,
+                          {
+                            id: `draft-rate-${it.taxRate}`,
+                            rate: it.taxRate,
+                            label: `GST ${formatGstRate(it.taxRate)}`,
+                            enabled: true,
+                          },
+                        ].sort((a, b) => a.rate - b.rate);
+
+                    return (
+                      <div
+                        key={idx}
+                        className="px-3 py-2 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <span className="font-semibold text-neutral-900 dark:text-neutral-100 truncate block">
+                            {it.name}
+                          </span>
+                          <span className="text-[11px] text-neutral-500 font-mono tabular-nums">
+                            ₹{it.unitPrice} × {it.quantity} {it.unit}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <select
+                            value={it.taxRate}
+                            onChange={e =>
+                              setDraftItems(prev =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, taxRate: Number(e.target.value) } : row
+                                )
                               )
-                            )
-                          }
-                          className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="w-6 text-center font-mono font-semibold">
-                          {it.quantity}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDraftItems(prev =>
-                              prev.map((row, i) =>
-                                i === idx ? { ...row, quantity: row.quantity + 1 } : row
+                            }
+                            className="px-1.5 py-0.5 text-[11px] font-mono bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-800 dark:text-neutral-200"
+                          >
+                            {rowSlabs.map(s => (
+                              <option key={s.id} value={s.rate}>
+                                GST {formatGstRate(s.rate)}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftItems(prev =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, quantity: Math.max(1, row.quantity - 1) } : row
+                                )
                               )
-                            )
-                          }
-                          className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDraftItems(prev => prev.filter((_, i) => i !== idx))}
-                          className="p-1 text-neutral-400 hover:text-rose-600 cursor-pointer"
-                          title="Remove item"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                            }
+                            className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="w-6 text-center font-mono font-semibold tabular-nums">
+                            {it.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftItems(prev =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, quantity: row.quantity + 1 } : row
+                                )
+                              )
+                            }
+                            className="w-6 h-6 rounded border border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDraftItems(prev => prev.filter((_, i) => i !== idx))}
+                            className="p-1 text-neutral-400 hover:text-rose-600 cursor-pointer"
+                            title="Remove item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -869,6 +999,11 @@ export const AddInvoiceItemModal: React.FC<AddInvoiceItemModalProps> = ({
           )}
         </div>
       </div>
+
+      <GstSlabManagerModal
+        isOpen={isSlabManagerOpen}
+        onClose={() => setIsSlabManagerOpen(false)}
+      />
     </div>
   );
 };

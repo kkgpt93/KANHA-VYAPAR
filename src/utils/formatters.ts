@@ -1,4 +1,5 @@
 import { Invoice, StoreSettings } from '../types';
+import { computeInvoiceSlabBreakup, formatGstRate } from './gst';
 
 export function formatCurrency(amount: number, symbol: string = '₹'): string {
   return `${symbol}${amount.toLocaleString('en-IN', {
@@ -52,17 +53,21 @@ export function generateBarcode(): string {
 }
 
 export function buildWhatsAppInvoiceText(invoice: Invoice, settings: StoreSettings): string {
+  const supplyType = invoice.gstSupplyType || settings.gstSupplyType || 'intrastate';
+  const slabRows = computeInvoiceSlabBreakup(invoice.items).filter(r => r.rate > 0);
+
   const lines: string[] = [
     `🧾 *${settings.storeName.toUpperCase()}*`,
-    `${settings.tagline}`,
-    `📞 Phone: ${settings.phone}`,
-    `📍 ${settings.address}`,
+    ...(settings.tagline ? [settings.tagline] : []),
+    ...(settings.phone ? [`📞 Phone: ${settings.phone}`] : []),
+    ...(settings.gstin ? [`🏛️ GSTIN: ${settings.gstin}`] : []),
+    ...(settings.address ? [`📍 ${settings.address}`] : []),
     `--------------------------------`,
     `*Invoice:* ${invoice.invoiceNumber}`,
     `*Date:* ${formatDateTime(invoice.createdAt)}`,
     `*Customer:* ${invoice.customerName || 'Walk-in Customer'}`,
     ...(invoice.customerPhone ? [`*Mobile No:* +91 ${invoice.customerPhone}`] : []),
-    ...(invoice.customerGstin ? [`*GSTIN:* ${invoice.customerGstin}`] : []),
+    ...(invoice.customerGstin ? [`*Customer GSTIN:* ${invoice.customerGstin}`] : []),
     ...(invoice.customerAddress ? [`*Address:* ${invoice.customerAddress}`] : []),
     `--------------------------------`,
     `*ITEMS:*`,
@@ -70,17 +75,26 @@ export function buildWhatsAppInvoiceText(invoice: Invoice, settings: StoreSettin
 
   invoice.items.forEach((item, index) => {
     lines.push(
-      `${index + 1}. ${item.name} (${item.quantity} ${item.unit}) @ ₹${item.unitPrice.toFixed(2)} = *₹${item.total.toFixed(2)}*`
+      `${index + 1}. ${item.name} (${item.quantity} ${item.unit}) @ ₹${item.unitPrice.toFixed(2)} [GST ${formatGstRate(item.taxRate)}] = *₹${item.total.toFixed(2)}*`
     );
   });
 
   lines.push(`--------------------------------`);
-  lines.push(`Subtotal: ₹${invoice.subtotal.toFixed(2)}`);
+  lines.push(`Taxable Subtotal: ₹${invoice.subtotal.toFixed(2)}`);
   if (invoice.discountTotal > 0) {
     lines.push(`Discount: -₹${invoice.discountTotal.toFixed(2)}`);
   }
   if (invoice.taxTotal > 0) {
-    lines.push(`GST/Tax: ₹${invoice.taxTotal.toFixed(2)}`);
+    lines.push(`GST Total: ₹${invoice.taxTotal.toFixed(2)}`);
+    slabRows.forEach(s => {
+      if (supplyType === 'interstate') {
+        lines.push(`  • IGST ${formatGstRate(s.igstRate)}: ₹${s.igstAmount.toFixed(2)}`);
+      } else {
+        lines.push(
+          `  • GST ${formatGstRate(s.rate)} (CGST ₹${s.cgstAmount.toFixed(2)} + SGST ₹${s.sgstAmount.toFixed(2)})`
+        );
+      }
+    });
   }
   lines.push(`*GRAND TOTAL: ₹${invoice.grandTotal.toFixed(2)}*`);
   lines.push(`Payment Mode: ${invoice.paymentMethod.toUpperCase()} (${invoice.status.toUpperCase()})`);

@@ -11,6 +11,7 @@ import {
   Download,
   X,
   Plus,
+  Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Invoice } from '../types';
@@ -19,6 +20,7 @@ import { exportInvoicesToCSV } from '../utils/reportExport';
 import { InvoiceModal } from './InvoiceModal';
 import { InvoicesReportModal } from './InvoicesReportModal';
 import { AddInvoiceItemModal } from './AddInvoiceItemModal';
+import { GstSlabManagerModal } from './GstSlabManagerModal';
 
 export const InvoicesList: React.FC = () => {
   const { invoices, cancelOrRefundInvoice, settings, activeUser } = useApp();
@@ -28,6 +30,7 @@ export const InvoicesList: React.FC = () => {
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [openAddItemImmediately, setOpenAddItemImmediately] = useState(false);
   const [isNewInvoiceModalOpen, setIsNewInvoiceModalOpen] = useState(false);
+  const [isSlabManagerOpen, setIsSlabManagerOpen] = useState(false);
   const [confirmRefundId, setConfirmRefundId] = useState<string | null>(null);
 
   // Batch Selection State
@@ -133,7 +136,13 @@ export const InvoicesList: React.FC = () => {
     const phone = inv.customerPhone ? inv.customerPhone.replace(/\D/g, '') : '';
     const cleanPhone = phone.length === 10 ? `91${phone}` : phone;
     const url = cleanPhone ? `https://wa.me/${cleanPhone}?text=${text}` : `https://wa.me/?text=${text}`;
-    window.open(url, '_blank');
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleConfirmRefund = (inv: Invoice) => {
@@ -161,7 +170,7 @@ export const InvoicesList: React.FC = () => {
           </p>
         </div>
 
-        {/* Create Invoice / Add Item & Export Buttons */}
+        {/* Create Invoice / Add Item, GST Slabs & Export Buttons */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -171,6 +180,16 @@ export const InvoicesList: React.FC = () => {
           >
             <Plus className="w-3.5 h-3.5" />
             <span>+ New Invoice / Add Item</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsSlabManagerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Manage All & Custom GST Slabs"
+          >
+            <Percent className="w-3.5 h-3.5" />
+            <span>GST Slabs</span>
           </button>
 
           <button
@@ -548,6 +567,12 @@ export const InvoicesList: React.FC = () => {
             ? `Invoices Report (${selectedInvoiceIds.size} Selected Bills)`
             : 'Invoices & Sales Register Statement'
         }
+      />
+
+      {/* GST Slab Manager Modal */}
+      <GstSlabManagerModal
+        isOpen={isSlabManagerOpen}
+        onClose={() => setIsSlabManagerOpen(false)}
       />
     </div>
   );

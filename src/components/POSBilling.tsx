@@ -27,13 +27,22 @@ import {
   Link2,
   Building2,
   PackagePlus,
+  Percent,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Product, PaymentMethod, Invoice, Customer } from '../types';
+import { Product, PaymentMethod, Invoice, InvoiceItem, Customer } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import {
+  calculateLineGst,
+  computeInvoiceSlabBreakup,
+  formatGstRate,
+  getEnabledGstSlabs,
+  roundCurrency,
+} from '../utils/gst';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { PrintPreviewModal } from './PrintPreviewModal';
 import { AddInvoiceItemModal } from './AddInvoiceItemModal';
+import { GstSlabManagerModal } from './GstSlabManagerModal';
 
 export const POSBilling: React.FC = () => {
   const {
@@ -45,6 +54,9 @@ export const POSBilling: React.FC = () => {
     addToCart,
     removeFromCart,
     updateCartQuantity,
+    updateCartTaxRate,
+    applyGstSlabToCart,
+    addOrUpdateGstSlab,
     clearCart,
     checkout,
     settings,
@@ -61,9 +73,12 @@ export const POSBilling: React.FC = () => {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null);
 
-  // Quick Add Item to Bill / Invoice modal state
+  // Quick Add Item & GST Slab Manager modal states
   const [isQuickAddItemOpen, setIsQuickAddItemOpen] = useState(false);
   const [quickAddInitialName, setQuickAddInitialName] = useState('');
+  const [isSlabManagerOpen, setIsSlabManagerOpen] = useState(false);
+  const [customTaxEditingId, setCustomTaxEditingId] = useState<string | null>(null);
+  const [customTaxDraft, setCustomTaxDraft] = useState<string>('');
 
   // Draft print preview state
   const [isDraftPreviewOpen, setIsDraftPreviewOpen] = useState(false);
@@ -172,25 +187,70 @@ export const POSBilling: React.FC = () => {
     });
   }, [products, searchQuery, selectedCategory]);
 
+  const enabledGstSlabs = useMemo(
+    () => getEnabledGstSlabs(settings.gstSlabs),
+    [settings.gstSlabs]
+  );
+
+  const priceMode = settings.gstPriceMode || 'exclusive';
+  const isInterstate = settings.gstSupplyType === 'interstate';
+
+  // Computed line items across all GST slabs (matching checkout() math to exact paise)
+  const cartComputedItems = useMemo<InvoiceItem[]>(() => {
+    return cart.map(ci => {
+      const calc = calculateLineGst({
+        quantity: ci.quantity,
+        unitPrice: ci.unitPrice,
+        discountPercent: ci.discountPercent || 0,
+        taxRate: ci.taxRate,
+        priceMode,
+      });
+      return {
+        productId: ci.product.id,
+        name: ci.product.name,
+        barcode: ci.product.barcode,
+        hsnCode: ci.product.hsnCode,
+        unit: ci.product.unit,
+        quantity: ci.quantity,
+        unitPrice: ci.unitPrice,
+        taxRate: ci.taxRate,
+        taxAmount: calc.taxAmount,
+        discountAmount: calc.discountAmount,
+        total: calc.total,
+      };
+    });
+  }, [cart, priceMode]);
+
+  const cartSlabBreakup = useMemo(
+    () => computeInvoiceSlabBreakup(cartComputedItems),
+    [cartComputedItems]
+  );
+
   // Totals calculations
   const cartSubtotal = useMemo(() => {
-    return cart.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
-  }, [cart]);
+    return roundCurrency(
+      cartComputedItems.reduce(
+        (sum, it) => sum + Math.max(0, it.total - it.taxAmount + it.discountAmount),
+        0
+      )
+    );
+  }, [cartComputedItems]);
+
+  const cartItemDiscounts = useMemo(() => {
+    return roundCurrency(cartComputedItems.reduce((sum, it) => sum + it.discountAmount, 0));
+  }, [cartComputedItems]);
 
   const cartTaxTotal = useMemo(() => {
-    return cart.reduce((sum, it) => {
-      const lineTotal = it.quantity * it.unitPrice;
-      const discount = (lineTotal * (it.discountPercent || 0)) / 100;
-      return sum + Math.round(((lineTotal - discount) * it.taxRate) / 100);
-    }, 0);
-  }, [cart]);
+    return roundCurrency(cartComputedItems.reduce((sum, it) => sum + it.taxAmount, 0));
+  }, [cartComputedItems]);
 
   const discountAmount = useMemo(() => {
-    return Math.round((cartSubtotal * billDiscountPercent) / 100);
-  }, [cartSubtotal, billDiscountPercent]);
+    const overall = roundCurrency((cartSubtotal * billDiscountPercent) / 100);
+    return roundCurrency(cartItemDiscounts + overall);
+  }, [cartSubtotal, billDiscountPercent, cartItemDiscounts]);
 
   const grandTotal = useMemo(() => {
-    return Math.max(0, cartSubtotal + cartTaxTotal - discountAmount);
+    return roundCurrency(Math.max(0, cartSubtotal + cartTaxTotal - discountAmount));
   }, [cartSubtotal, cartTaxTotal, discountAmount]);
 
   // Set default cash tendered to grandTotal when grandTotal changes
@@ -260,34 +320,6 @@ export const POSBilling: React.FC = () => {
   const liveDraftInvoice = useMemo<Invoice | null>(() => {
     if (!isDraftPreviewOpen) return null;
 
-    const draftItems = cart.map(ci => {
-      const gross = ci.quantity * ci.unitPrice;
-      const itemDiscount = (gross * (ci.discountPercent || 0)) / 100;
-      const netAfterItemDiscount = gross - itemDiscount;
-      const taxAmt = Math.round((netAfterItemDiscount * ci.taxRate) / 100);
-      const total = netAfterItemDiscount + taxAmt;
-
-      return {
-        productId: ci.product.id,
-        name: ci.product.name,
-        barcode: ci.product.barcode,
-        unit: ci.product.unit,
-        quantity: ci.quantity,
-        unitPrice: ci.unitPrice,
-        taxRate: ci.taxRate,
-        taxAmount: taxAmt,
-        discountAmount: itemDiscount,
-        total,
-      };
-    });
-
-    const draftSubtotal = draftItems.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
-    const draftItemDiscounts = draftItems.reduce((sum, it) => sum + it.discountAmount, 0);
-    const draftOverallDiscount = (draftSubtotal * billDiscountPercent) / 100;
-    const draftDiscountTotal = draftItemDiscounts + draftOverallDiscount;
-    const draftTaxTotal = draftItems.reduce((sum, it) => sum + it.taxAmount, 0);
-    const draftGrandTotal = Math.max(0, Math.round(draftSubtotal + draftTaxTotal - draftDiscountTotal));
-
     return {
       id: 'draft-preview',
       invoiceNumber: 'DRAFT-PREVIEW',
@@ -299,24 +331,31 @@ export const POSBilling: React.FC = () => {
       customerPhone: customerPhone.trim() || (selectedCustomer ? selectedCustomer.phone : ''),
       customerAddress: customerAddress.trim() || (selectedCustomer ? selectedCustomer.address : ''),
       customerGstin: customerGstin.trim() || (selectedCustomer ? selectedCustomer.gstin : ''),
-      items: draftItems,
-      subtotal: draftSubtotal,
-      taxTotal: draftTaxTotal,
-      discountTotal: draftDiscountTotal,
-      grandTotal: draftGrandTotal,
+      items: cartComputedItems,
+      subtotal: cartSubtotal,
+      taxTotal: cartTaxTotal,
+      discountTotal: discountAmount,
+      grandTotal,
+      gstSupplyType: settings.gstSupplyType,
+      gstPriceMode: settings.gstPriceMode,
       paymentMethod,
-      amountTendered: typeof cashTendered === 'number' ? cashTendered : draftGrandTotal,
+      amountTendered: typeof cashTendered === 'number' ? cashTendered : grandTotal,
       changeDue:
         paymentMethod === 'cash' && typeof cashTendered === 'number'
-          ? Math.max(0, cashTendered - draftGrandTotal)
+          ? roundCurrency(Math.max(0, cashTendered - grandTotal))
           : 0,
       status: 'paid',
       notes: customerNotes.trim(),
     };
   }, [
     isDraftPreviewOpen,
-    cart,
-    billDiscountPercent,
+    cartComputedItems,
+    cartSubtotal,
+    cartTaxTotal,
+    discountAmount,
+    grandTotal,
+    settings.gstSupplyType,
+    settings.gstPriceMode,
     activeUser,
     selectedCustomer,
     customerName,
@@ -552,8 +591,10 @@ export const POSBilling: React.FC = () => {
                         <div className="text-sm font-bold text-neutral-900 dark:text-neutral-100 tabular-nums font-mono">
                           {formatCurrency(product.sellingPrice, settings.currencySymbol)}
                         </div>
-                        <div className="text-[10px] text-neutral-500 flex items-center gap-1">
-                          <span>Stock: {product.stock} {product.unit}</span>
+                        <div className="text-[10px] text-neutral-500 flex flex-wrap items-center gap-1">
+                          <span>{product.stock} {product.unit}</span>
+                          <span>·</span>
+                          <span className="font-mono">GST {formatGstRate(product.taxRate)}</span>
                           {isLowStock && (
                             <span className="text-amber-600 font-medium">· Low</span>
                           )}
@@ -616,6 +657,16 @@ export const POSBilling: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setIsSlabManagerOpen(true)}
+              className="text-xs text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1 font-semibold transition-colors border border-emerald-200 dark:border-emerald-800 px-2 py-1 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+              title="Configure All GST Slabs & Custom %"
+            >
+              <Percent className="w-3.5 h-3.5" />
+              <span>GST</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handleOpenPrintPreview}
               className="text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 flex items-center gap-1 font-medium transition-colors border border-neutral-200 dark:border-neutral-700 px-2 py-1 rounded-md bg-neutral-50 dark:bg-neutral-800/60 whitespace-nowrap shrink-0 cursor-pointer"
               title="Print Preview (F10)"
@@ -637,6 +688,35 @@ export const POSBilling: React.FC = () => {
           </div>
         </div>
 
+        {/* Quick Apply GST Slab Bar when Bill has items */}
+        {cart.length > 0 && (
+          <div className="px-3 py-1.5 bg-neutral-50 dark:bg-neutral-950/60 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-neutral-500 font-medium whitespace-nowrap">
+              All Items GST:
+            </span>
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+              {enabledGstSlabs.map(slab => (
+                <button
+                  key={slab.id}
+                  type="button"
+                  onClick={() => applyGstSlabToCart(slab.rate)}
+                  className="px-1.5 py-0.5 rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:border-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-300 font-mono text-[10px] font-semibold whitespace-nowrap shrink-0 cursor-pointer"
+                  title={`Apply GST ${formatGstRate(slab.rate)} to all items in current bill`}
+                >
+                  {formatGstRate(slab.rate)}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setIsSlabManagerOpen(true)}
+                className="px-1.5 py-0.5 rounded border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-semibold text-[10px] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                + Custom %
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Cart Items List */}
         <div className="flex-1 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800/60 p-2 sm:p-3">
           {cart.length === 0 ? (
@@ -646,70 +726,169 @@ export const POSBilling: React.FC = () => {
                 Invoice / Bill is currently empty
               </p>
               <p className="text-[11px] text-neutral-400 mt-1 max-w-[220px]">
-                Click items from catalog, scan barcode, or add any item directly below
+                Click items from catalog, scan barcode, or add any item with custom GST below
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setQuickAddInitialName('');
-                  setIsQuickAddItemOpen(true);
-                }}
-                className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Add Item (आइटम जोड़ें)</span>
-              </button>
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickAddInitialName('');
+                    setIsQuickAddItemOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add Item (आइटम जोड़ें)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsSlabManagerOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <Percent className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>GST Slabs</span>
+                </button>
+              </div>
             </div>
           ) : (
             cart.map(item => {
-              const lineTotal = item.quantity * item.unitPrice;
+              const calc = calculateLineGst({
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                discountPercent: item.discountPercent || 0,
+                taxRate: item.taxRate,
+                priceMode,
+              });
+              const itemSlabOptions = enabledGstSlabs.some(s => s.rate === item.taxRate)
+                ? enabledGstSlabs
+                : [
+                    ...enabledGstSlabs,
+                    {
+                      id: `custom-line-${item.taxRate}`,
+                      rate: item.taxRate,
+                      label: `GST ${formatGstRate(item.taxRate)}`,
+                      enabled: true,
+                    },
+                  ].sort((a, b) => a.rate - b.rate);
+              const isEditingCustomTax = customTaxEditingId === item.product.id;
+
               return (
-                <div key={item.product.id} className="py-2.5 px-1 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <h5 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 truncate">
-                      {item.product.name}
-                    </h5>
-                    <div className="flex items-center gap-2 text-[11px] text-neutral-500 font-mono mt-0.5">
-                      <span>₹{item.unitPrice.toFixed(2)}</span>
-                      <span>·</span>
-                      <span>GST {item.taxRate}%</span>
+                <div key={item.product.id} className="py-2.5 px-1 space-y-1.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex-1 min-w-0">
+                      <h5 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                        {item.product.name}
+                      </h5>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500 font-mono mt-0.5 tabular-nums">
+                        <span>₹{item.unitPrice.toFixed(2)}</span>
+                        <span>·</span>
+                        {/* Per-item interactive GST Slab Selector */}
+                        <select
+                          value={item.taxRate}
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (val === '__custom__') {
+                              setCustomTaxEditingId(item.product.id);
+                              setCustomTaxDraft(String(item.taxRate));
+                            } else {
+                              updateCartTaxRate(item.product.id, Number(val));
+                              setCustomTaxEditingId(null);
+                            }
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-[10px] font-mono font-semibold text-emerald-700 dark:text-emerald-300 focus:outline-hidden focus:border-emerald-500 cursor-pointer"
+                          title="Change GST Slab for this item"
+                        >
+                          {itemSlabOptions.map(s => (
+                            <option key={s.id} value={s.rate}>
+                              GST {formatGstRate(s.rate)}
+                            </option>
+                          ))}
+                          <option value="__custom__">+ Custom GST %...</option>
+                        </select>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Quantity Stepper */}
-                  <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-md bg-neutral-50 dark:bg-neutral-800">
+                    {/* Quantity Stepper */}
+                    <div className="flex items-center border border-neutral-300 dark:border-neutral-700 rounded-md bg-neutral-50 dark:bg-neutral-800 shrink-0">
+                      <button
+                        onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
+                        className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 cursor-pointer"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="w-7 text-center text-xs font-semibold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
+                        {item.quantity}
+                      </span>
+                      <button
+                        onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
+                        disabled={item.quantity >= item.product.stock}
+                        className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 disabled:opacity-40 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+
+                    {/* Line Total (with GST) */}
+                    <div className="text-right min-w-[68px] shrink-0">
+                      <span className="text-xs font-bold text-neutral-900 dark:text-neutral-100 font-mono tabular-nums block">
+                        ₹{calc.total.toFixed(2)}
+                      </span>
+                      {calc.taxAmount > 0 && (
+                        <span className="text-[10px] text-neutral-400 font-mono tabular-nums block">
+                          +₹{calc.taxAmount.toFixed(2)} tax
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Remove Button */}
                     <button
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
-                      className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300"
+                      onClick={() => removeFromCart(item.product.id)}
+                      className="text-neutral-400 hover:text-rose-500 p-1 rounded-md transition-colors shrink-0 cursor-pointer"
                     >
-                      <Minus className="w-3 h-3" />
-                    </button>
-                    <span className="w-7 text-center text-xs font-semibold font-mono tabular-nums text-neutral-900 dark:text-neutral-100">
-                      {item.quantity}
-                    </span>
-                    <button
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
-                      disabled={item.quantity >= item.product.stock}
-                      className="w-6 h-6 flex items-center justify-center text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 disabled:opacity-40"
-                    >
-                      <Plus className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  {/* Line Total */}
-                  <div className="text-right min-w-[64px]">
-                    <span className="text-xs font-bold text-neutral-900 dark:text-neutral-100 font-mono tabular-nums">
-                      ₹{lineTotal.toFixed(0)}
-                    </span>
-                  </div>
-
-                  {/* Remove Button */}
-                  <button
-                    onClick={() => removeFromCart(item.product.id)}
-                    className="text-neutral-400 hover:text-rose-500 p-1 rounded-md transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Inline Custom GST % Editor for this line item */}
+                  {isEditingCustomTax && (
+                    <div className="flex items-center justify-between gap-1.5 p-1.5 rounded-md bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/80 text-[11px]">
+                      <span className="text-neutral-700 dark:text-neutral-300 font-medium">
+                        Custom GST %:
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={customTaxDraft}
+                          onChange={e => setCustomTaxDraft(e.target.value)}
+                          autoFocus
+                          className="w-16 px-1.5 py-0.5 text-xs font-mono font-bold text-right bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded text-neutral-900 dark:text-neutral-100 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const r = Math.max(0, Math.min(100, Number(customTaxDraft) || 0));
+                            updateCartTaxRate(item.product.id, r);
+                            addOrUpdateGstSlab({ rate: r });
+                            setCustomTaxEditingId(null);
+                          }}
+                          className="px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold cursor-pointer whitespace-nowrap"
+                          title="Apply to item & save slab"
+                        >
+                          Apply & Save Slab
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCustomTaxEditingId(null)}
+                          className="p-0.5 text-neutral-500 hover:text-neutral-800 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })
@@ -931,26 +1110,50 @@ export const POSBilling: React.FC = () => {
 
         {/* Bill Summary & Payment Section */}
         <div className="p-3 sm:p-4 border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-3">
-          {/* Signature Jewel Subtotals & Grand Total Card */}
+          {/* Signature Jewel Subtotals, Slab-wise GST Breakup & Grand Total Card */}
           <div className="p-3 rounded-xl brand-command-surface text-white border space-y-1.5 text-xs">
             <div className="flex justify-between text-white/80">
-              <span>Subtotal:</span>
+              <span>
+                Taxable Subtotal ({priceMode === 'inclusive' ? 'MRP Incl. GST' : 'GST Extra'}):
+              </span>
               <span className="font-mono tabular-nums">₹{cartSubtotal.toFixed(2)}</span>
             </div>
             {discountAmount > 0 && (
               <div className="flex justify-between text-amber-300 font-medium">
-                <span>Discount ({billDiscountPercent}%):</span>
+                <span>Discount:</span>
                 <span className="font-mono tabular-nums">-₹{discountAmount.toFixed(2)}</span>
               </div>
             )}
-            <div className="flex justify-between text-white/80">
-              <span>GST / Tax:</span>
+            <div className="flex justify-between text-white/90 font-medium">
+              <span>
+                GST Total ({isInterstate ? 'IGST' : 'CGST + SGST'}):
+              </span>
               <span className="font-mono tabular-nums">₹{cartTaxTotal.toFixed(2)}</span>
             </div>
+
+            {/* Live Slab-wise Breakup */}
+            {cartSlabBreakup.length > 0 && (
+              <div className="pt-1 pb-0.5 space-y-0.5 border-t border-white/10 text-[10px] text-white/75 font-mono tabular-nums">
+                {cartSlabBreakup.map(row => (
+                  <div key={row.rate} className="flex justify-between">
+                    <span>
+                      GST {formatGstRate(row.rate)}{' '}
+                      {row.rate > 0
+                        ? isInterstate
+                          ? `(IGST ${row.igstRate}%)`
+                          : `(C ${row.cgstRate}%+S ${row.sgstRate}%)`
+                        : '(Exempt)'}
+                    </span>
+                    <span>₹{row.totalTax.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex justify-between items-baseline text-base font-bold text-white pt-1.5 border-t border-white/15">
               <span>Total Payable:</span>
               <span className="font-mono tabular-nums text-lg brand-gold-text">
-                {formatCurrency(grandTotal, settings.currencySymbol)}
+                ₹{grandTotal.toFixed(2)}
               </span>
             </div>
           </div>
@@ -1100,6 +1303,12 @@ export const POSBilling: React.FC = () => {
         onClose={() => {
           setIsDraftPreviewOpen(false);
         }}
+      />
+
+      {/* GST Slab Master Modal */}
+      <GstSlabManagerModal
+        isOpen={isSlabManagerOpen}
+        onClose={() => setIsSlabManagerOpen(false)}
       />
     </div>
   );

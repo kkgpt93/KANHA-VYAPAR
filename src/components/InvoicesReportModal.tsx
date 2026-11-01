@@ -13,10 +13,11 @@ import {
   Percent,
   CheckCircle,
 } from 'lucide-react';
-import { Invoice, StoreSettings } from '../types';
+import { Invoice } from '../types';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { exportInvoicesToCSV } from '../utils/reportExport';
+import { computeInvoiceSlabBreakup, formatGstRate } from '../utils/gst';
 
 export interface InvoicesReportModalProps {
   invoices: Invoice[];
@@ -96,6 +97,11 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
   const paidCount = invoices.filter(inv => inv.status === 'paid').length;
   const refundedCount = invoices.filter(inv => inv.status === 'refunded').length;
 
+  const consolidatedSlabBreakup = computeInvoiceSlabBreakup(
+    invoices.filter(inv => inv.status === 'paid').flatMap(inv => inv.items)
+  );
+  const isInterstate = settings.gstSupplyType === 'interstate';
+
   // Date range
   const dates = invoices.map(i => new Date(i.createdAt).getTime()).filter(t => !isNaN(t));
   const minDate = dates.length ? new Date(Math.min(...dates)) : null;
@@ -116,7 +122,8 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
                 <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
                   PDF & Print Report Preview
                 </h3>
-                <span className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 rounded font-mono">
+                <span className="text-neutral-400">·</span>
+                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 font-mono">
                   {totalCount} Invoices Selected
                 </span>
               </div>
@@ -287,6 +294,73 @@ export const InvoicesReportModal: React.FC<InvoicesReportModalProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Consolidated Slab-Wise GST Summary Table */}
+            {consolidatedSlabBreakup.length > 0 && (
+              <div className="border border-neutral-300 rounded-xs overflow-hidden">
+                <div className="px-3 py-1.5 bg-neutral-100 border-b border-neutral-300 text-[11px] font-bold uppercase text-neutral-800 flex justify-between">
+                  <span>
+                    Slab-Wise GST Tax Register ({isInterstate ? 'IGST' : 'CGST + SGST'})
+                  </span>
+                  <span className="font-mono">
+                    Paid Bills Tax: ₹
+                    {consolidatedSlabBreakup
+                      .reduce((s, r) => s + r.totalTax, 0)
+                      .toFixed(2)}
+                  </span>
+                </div>
+                <table className="w-full text-left text-xs font-mono tabular-nums border-collapse">
+                  <thead>
+                    <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-600 font-sans font-semibold text-[11px]">
+                      <th className="p-2 border-r border-neutral-200">GST Slab</th>
+                      <th className="p-2 border-r border-neutral-200 text-center">Units Sold</th>
+                      <th className="p-2 border-r border-neutral-200 text-right">Taxable Value (₹)</th>
+                      {isInterstate ? (
+                        <th className="p-2 border-r border-neutral-200 text-right">IGST (₹)</th>
+                      ) : (
+                        <>
+                          <th className="p-2 border-r border-neutral-200 text-right">CGST (₹)</th>
+                          <th className="p-2 border-r border-neutral-200 text-right">SGST (₹)</th>
+                        </>
+                      )}
+                      <th className="p-2 text-right">Total GST (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200">
+                    {consolidatedSlabBreakup.map(row => (
+                      <tr key={row.rate}>
+                        <td className="p-2 border-r border-neutral-200 font-bold text-neutral-900">
+                          GST {formatGstRate(row.rate)}
+                        </td>
+                        <td className="p-2 border-r border-neutral-200 text-center">
+                          {row.itemCount}
+                        </td>
+                        <td className="p-2 border-r border-neutral-200 text-right">
+                          {row.taxableAmount.toFixed(2)}
+                        </td>
+                        {isInterstate ? (
+                          <td className="p-2 border-r border-neutral-200 text-right">
+                            {row.igstAmount.toFixed(2)}
+                          </td>
+                        ) : (
+                          <>
+                            <td className="p-2 border-r border-neutral-200 text-right">
+                              {row.cgstAmount.toFixed(2)}
+                            </td>
+                            <td className="p-2 border-r border-neutral-200 text-right">
+                              {row.sgstAmount.toFixed(2)}
+                            </td>
+                          </>
+                        )}
+                        <td className="p-2 text-right font-bold text-neutral-900">
+                          {row.totalTax.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Invoices Detailed Table */}
             <div className="border border-neutral-300 rounded-xs overflow-hidden">
