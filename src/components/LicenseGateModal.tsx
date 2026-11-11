@@ -14,6 +14,9 @@ import {
   LogOut,
   Users,
   ShieldCheck,
+  MessageSquare,
+  Mail,
+  LifeBuoy,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -21,6 +24,11 @@ import {
   PUBLIC_LOGIN_ID,
   PUBLIC_LOGIN_PASSWORD,
   PUBLIC_2DAY_LICENSE_KEY,
+  DEFAULT_LICENSE_TARGET_PHONE,
+  DEFAULT_CUSTOMER_SUPPORT_EMAIL,
+  buildLicenseRenewalRequestText,
+  buildLicenseWhatsAppUrl,
+  buildLicenseSmsUrl,
 } from '../utils/license';
 import { formatDateTime } from '../utils/formatters';
 import { COLOR_THEMES } from '../utils/themes';
@@ -207,20 +215,17 @@ export const LicenseGateModal: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const whatsappRenewalMessage = encodeURIComponent(
-    [
-      `नमस्ते ${creatorConfig.vendorName || 'Admin'},`,
-      `हमें VyaparPOS सॉफ्टवेयर (${settings.storeName}) के लिए 1-वर्षीय लाइसेंस की चाहिए।`,
-      `System Installation ID: *${licenseState.installationId}*`,
-      ...(licenseState.activeKey ? [`Previous Key: ${licenseState.activeKey}`] : []),
-      `कृपया अगले 1 वर्ष (365 Days) के लिए नई लाइसेंस की जारी करें।`,
-    ].join('\n')
-  );
+  const renewalText = buildLicenseRenewalRequestText({
+    storeName: settings.storeName,
+    installationId: licenseState.installationId,
+    activeKey: licenseState.activeKey,
+    storePhone: settings.phone,
+  });
 
-  const cleanVendorPhone = creatorConfig.vendorPhone.replace(/\D/g, '');
-  const whatsappHref = cleanVendorPhone
-    ? `https://wa.me/${cleanVendorPhone}?text=${whatsappRenewalMessage}`
-    : `https://wa.me/?text=${whatsappRenewalMessage}`;
+  const targetPhone = creatorConfig.vendorPhone || DEFAULT_LICENSE_TARGET_PHONE;
+  const whatsappHref = buildLicenseWhatsAppUrl(renewalText, targetPhone);
+  const smsHref = buildLicenseSmsUrl(renewalText, targetPhone);
+  const supportEmail = creatorConfig.vendorEmail || DEFAULT_CUSTOMER_SUPPORT_EMAIL;
 
   return (
     <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto no-print">
@@ -318,18 +323,58 @@ export const LicenseGateModal: React.FC = () => {
               )}
             </div>
 
-            {/* Bottom Safe Actions */}
+            {/* Bottom Actions: WhatsApp & SMS 1-Year License Request + Customer Support Email */}
             <div className="space-y-2.5 pt-4 border-t border-white/15">
+              <div className="text-[11px] font-medium text-white/80">
+                1-वर्षीय लाइसेंस की अनुरोध (Automatic Request):
+              </div>
+
+              {/* 1. WhatsApp Button (Golden / Amber as in user attachment) */}
               <a
                 href={whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-lg brand-active-tab hover:opacity-95 transition-opacity"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg brand-active-tab hover:opacity-95 shadow-sm transition-opacity"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>WhatsApp पर 1-साल की लाइसेंस की मांगें</span>
               </a>
 
+              {/* 2. SMS (Text Message) Button */}
+              <a
+                href={smsHref}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-sm transition-colors"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>SMS (Text Message) पर 1-साल की लाइसेंस की मांगें</span>
+              </a>
+
+              {/* 3. Customer Support Email Card (kanhasidhi@gmail.com visible) */}
+              <div className="p-3 rounded-xl bg-white/10 border border-white/15 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-white flex items-center gap-1.5">
+                    <LifeBuoy className="w-3.5 h-3.5 brand-gold-text" />
+                    <span>Customer Support (ग्राहक सहायता)</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-300 font-medium">Online Help</span>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/10">
+                  <span className="text-[11px] text-white/80">Support Email:</span>
+                  <a
+                    href={`mailto:${supportEmail}?subject=${encodeURIComponent(
+                      `VyaparPOS Support & License Request - ${settings.storeName}`
+                    )}&body=${encodeURIComponent(
+                      `Store: ${settings.storeName}\nSystem ID: ${licenseState.installationId}\nRequest:\n`
+                    )}`}
+                    className="text-xs font-mono font-bold brand-gold-text hover:underline break-all inline-flex items-center gap-1"
+                  >
+                    <Mail className="w-3 h-3" />
+                    <span>{supportEmail}</span>
+                  </a>
+                </div>
+              </div>
+
+              {/* 4. Emergency Backup Download */}
               <button
                 type="button"
                 onClick={handleEmergencyBackup}
@@ -615,6 +660,49 @@ export const LicenseGateModal: React.FC = () => {
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
+
+                {/* Instant Request via WhatsApp or SMS & Support Email */}
+                <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-neutral-500">
+                    <span>लाइसेंस की नहीं है? तुरंत मंगवाएं:</span>
+                    <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                      1-क्लिक ऑटोमैटिक संदेश
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href={whatsappHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>WhatsApp पर मांगें</span>
+                    </a>
+                    <a
+                      href={smsHref}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 shadow-2xs transition-colors"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>SMS (Text) पर मांगें</span>
+                    </a>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-neutral-100 dark:bg-neutral-800/80 border border-neutral-200 dark:border-neutral-700 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-neutral-600 dark:text-neutral-400 flex items-center gap-1.5">
+                      <LifeBuoy className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Customer Support:</span>
+                    </span>
+                    <a
+                      href={`mailto:${supportEmail}`}
+                      className="font-mono font-bold text-neutral-900 dark:text-neutral-100 hover:text-emerald-600 dark:hover:text-emerald-400 inline-flex items-center gap-1 hover:underline"
+                    >
+                      <Mail className="w-3 h-3" />
+                      <span>{supportEmail}</span>
+                    </a>
+                  </div>
+                </div>
               </div>
             )}
 

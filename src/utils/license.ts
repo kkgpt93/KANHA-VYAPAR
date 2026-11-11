@@ -554,8 +554,9 @@ export const LicenseStorage = {
     const defaults: CreatorConfig = {
       creatorIdHash: DEFAULT_CREATOR_ID_HASH,
       creatorPasswordHash: DEFAULT_CREATOR_PASSWORD_HASH,
-      vendorName: 'VyaparPOS Software Admin',
-      vendorPhone: '',
+      vendorName: 'VyaparPOS Support Admin',
+      vendorPhone: DEFAULT_LICENSE_TARGET_PHONE,
+      vendorEmail: DEFAULT_CUSTOMER_SUPPORT_EMAIL,
       failedAttempts: 0,
       lockoutUntil: null,
     };
@@ -569,7 +570,14 @@ export const LicenseStorage = {
           creatorIdHash: parsed.creatorIdHash || defaults.creatorIdHash,
           creatorPasswordHash: parsed.creatorPasswordHash || defaults.creatorPasswordHash,
           vendorName: parsed.vendorName || defaults.vendorName,
-          vendorPhone: parsed.vendorPhone ?? defaults.vendorPhone,
+          vendorPhone:
+            parsed.vendorPhone && parsed.vendorPhone.trim()
+              ? parsed.vendorPhone
+              : defaults.vendorPhone,
+          vendorEmail:
+            parsed.vendorEmail && parsed.vendorEmail.trim()
+              ? parsed.vendorEmail
+              : defaults.vendorEmail,
           failedAttempts: typeof parsed.failedAttempts === 'number' ? parsed.failedAttempts : 0,
           lockoutUntil: parsed.lockoutUntil ?? null,
         };
@@ -588,6 +596,55 @@ export const LicenseStorage = {
     }
   },
 };
+
+export const DEFAULT_LICENSE_TARGET_PHONE = '8871452077';
+export const DEFAULT_CUSTOMER_SUPPORT_EMAIL = 'kanhasidhi@gmail.com';
+
+/**
+ * Builds standard 1-year license renewal request text to send via WhatsApp or SMS.
+ */
+export function buildLicenseRenewalRequestText(options: {
+  storeName: string;
+  installationId: string;
+  activeKey?: string | null;
+  storePhone?: string;
+}): string {
+  return [
+    `नमस्ते Support Team,`,
+    `हमें VyaparPOS सॉफ्टवेयर (${options.storeName}) के लिए 1-वर्षीय लाइसेंस की (License Key) चाहिए।`,
+    `System Installation ID: *${options.installationId}*`,
+    ...(options.activeKey ? [`Current Key: ${options.activeKey}`] : []),
+    `कृपया अगले 1 वर्ष (365 Days) के लिए नई लाइसेंस की जारी करें।`,
+    `Store: ${options.storeName}`,
+    ...(options.storePhone ? [`Phone: ${options.storePhone}`] : []),
+  ].join('\n');
+}
+
+/**
+ * Generates direct WhatsApp click-to-chat URL automatically targeted to the creator phone (8871452077)
+ * without displaying the raw phone number to the customer.
+ */
+export function buildLicenseWhatsAppUrl(
+  text: string,
+  targetPhone: string = DEFAULT_LICENSE_TARGET_PHONE
+): string {
+  const digits = targetPhone.replace(/\D/g, '') || DEFAULT_LICENSE_TARGET_PHONE;
+  const cleanPhone = digits.length === 10 ? `91${digits}` : digits;
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
+}
+
+/**
+ * Generates direct SMS (Text Message) click URL automatically targeted to 8871452077
+ * with pre-filled message body without exposing the number on the customer button.
+ */
+export function buildLicenseSmsUrl(
+  text: string,
+  targetPhone: string = DEFAULT_LICENSE_TARGET_PHONE
+): string {
+  const digits = targetPhone.replace(/\D/g, '') || DEFAULT_LICENSE_TARGET_PHONE;
+  const cleanPhone = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+  return `sms:${cleanPhone}?body=${encodeURIComponent(text)}`;
+}
 
 export function activatePublicTrialState(
   currentState: LicenseState,

@@ -14,6 +14,9 @@ import {
   Eye,
   EyeOff,
   LogOut,
+  MessageSquare,
+  Mail,
+  LifeBuoy,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -21,6 +24,11 @@ import {
   PUBLIC_LOGIN_ID,
   PUBLIC_LOGIN_PASSWORD,
   PUBLIC_2DAY_LICENSE_KEY,
+  DEFAULT_LICENSE_TARGET_PHONE,
+  DEFAULT_CUSTOMER_SUPPORT_EMAIL,
+  buildLicenseRenewalRequestText,
+  buildLicenseWhatsAppUrl,
+  buildLicenseSmsUrl,
 } from '../utils/license';
 import { formatDate, formatDateTime } from '../utils/formatters';
 
@@ -76,8 +84,25 @@ export const LicenseManager: React.FC = () => {
 
   // Vendor Contact config form
   const [vendorNameInput, setVendorNameInput] = useState(creatorConfig.vendorName);
-  const [vendorPhoneInput, setVendorPhoneInput] = useState(creatorConfig.vendorPhone);
+  const [vendorPhoneInput, setVendorPhoneInput] = useState(
+    creatorConfig.vendorPhone || DEFAULT_LICENSE_TARGET_PHONE
+  );
+  const [vendorEmailInput, setVendorEmailInput] = useState(
+    creatorConfig.vendorEmail || DEFAULT_CUSTOMER_SUPPORT_EMAIL
+  );
   const [vendorSavedMsg, setVendorSavedMsg] = useState<string | null>(null);
+
+  // Prepared 1-Year Renewal Request Text & Direct Click URLs (8871452077 hidden from UI)
+  const renewalText = buildLicenseRenewalRequestText({
+    storeName: settings.storeName,
+    installationId: licenseState.installationId,
+    activeKey: licenseState.activeKey,
+    storePhone: settings.phone,
+  });
+  const targetPhone = creatorConfig.vendorPhone || DEFAULT_LICENSE_TARGET_PHONE;
+  const whatsappHref = buildLicenseWhatsAppUrl(renewalText, targetPhone);
+  const smsHref = buildLicenseSmsUrl(renewalText, targetPhone);
+  const supportEmail = creatorConfig.vendorEmail || DEFAULT_CUSTOMER_SUPPORT_EMAIL;
 
   // Creator ID & Password rotation form
   const [currentCreatorPass, setCurrentCreatorPass] = useState('');
@@ -181,10 +206,11 @@ export const LicenseManager: React.FC = () => {
   const handleSaveVendorContact = (e: React.FormEvent) => {
     e.preventDefault();
     updateCreatorConfig({
-      vendorName: vendorNameInput.trim() || 'VyaparPOS Software Admin',
-      vendorPhone: vendorPhoneInput.trim(),
+      vendorName: vendorNameInput.trim() || 'VyaparPOS Support Admin',
+      vendorPhone: vendorPhoneInput.trim() || DEFAULT_LICENSE_TARGET_PHONE,
+      vendorEmail: vendorEmailInput.trim() || DEFAULT_CUSTOMER_SUPPORT_EMAIL,
     });
-    setVendorSavedMsg('सॉफ्टवेयर प्रदाता संपर्क विवरण सेव हो गया!');
+    setVendorSavedMsg('सपोर्ट संपर्क विवरण (8871452077 & kanhasidhi@gmail.com) सेव हो गया!');
     setTimeout(() => setVendorSavedMsg(null), 3000);
   };
 
@@ -565,6 +591,72 @@ export const LicenseManager: React.FC = () => {
                   {renewalFeedback.text}
                 </div>
               )}
+
+              {/* 1-Year License Request via WhatsApp / SMS + Customer Support */}
+              <div className="pt-4 border-t border-neutral-100 dark:border-neutral-800 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-neutral-900 dark:text-neutral-100">
+                      1-वर्षीय लाइसेंस की अनुरोध (Automatic License Request)
+                    </h4>
+                    <p className="text-[11px] text-neutral-500">
+                      नीचे दिए गए बटन पर क्लिक करते ही आपके System ID के साथ लाइसेंस अनुरोध का संदेश स्वतः तैयार हो जाएगा।
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                    ऑटोमैटिक मैसेजिंग
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <a
+                    href={whatsappHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg brand-active-tab hover:opacity-95 shadow-xs transition-opacity"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>WhatsApp पर 1-साल की लाइसेंस की मांगें</span>
+                  </a>
+
+                  <a
+                    href={smsHref}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>SMS (Text Message) पर 1-साल की लाइसेंस की मांगें</span>
+                  </a>
+                </div>
+
+                {/* Customer Support Card */}
+                <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <LifeBuoy className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-neutral-900 dark:text-neutral-100">
+                        Customer Support (ग्राहक सेवा सहायता)
+                      </div>
+                      <div className="text-[11px] text-neutral-500">
+                        लाइसेंस व तकनीकी सहायता के लिए सहायता ईमेल पर संपर्क करें
+                      </div>
+                    </div>
+                  </div>
+
+                  <a
+                    href={`mailto:${supportEmail}?subject=${encodeURIComponent(
+                      `VyaparPOS License Support - ${settings.storeName}`
+                    )}&body=${encodeURIComponent(
+                      `Store: ${settings.storeName}\nSystem ID: ${licenseState.installationId}\nQuery:\n`
+                    )}`}
+                    className="font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-white dark:bg-neutral-900"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>{supportEmail}</span>
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Activation & Renewal History Ledger */}
@@ -1200,14 +1292,14 @@ export const LicenseManager: React.FC = () => {
                 >
                   <div>
                     <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-                      Creator Renewal Contact Info
+                      Creator Renewal Contact & Support Settings
                     </h3>
                     <p className="text-xs text-neutral-500 mt-0.5">
-                      लाइसेंस समाप्त होने पर ग्राहक को दिखने वाला WhatsApp सपोर्ट नंबर
+                      कस्टमर को केवल ऑटोमैटिक मैसेज बटन दिखेंगे (नंबर 8871452077 छुपा रहेगा) और सपोर्ट में kanhasidhi@gmail.com ईमेल दिखेगा।
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
                         Provider / Creator Name
@@ -1222,15 +1314,34 @@ export const LicenseManager: React.FC = () => {
 
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                        WhatsApp (e.g. 9198XXXXXXXX)
+                        Target Phone (WhatsApp & SMS)
                       </label>
                       <input
                         type="tel"
                         value={vendorPhoneInput}
                         onChange={e => setVendorPhoneInput(e.target.value)}
-                        placeholder="919876543210"
+                        placeholder="8871452077"
                         className="w-full px-3 py-2 text-xs font-mono bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-700 rounded-lg"
                       />
+                      <span className="text-[10px] text-neutral-400 block">
+                        Auto recipient: 8871452077
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                        Customer Support Email
+                      </label>
+                      <input
+                        type="email"
+                        value={vendorEmailInput}
+                        onChange={e => setVendorEmailInput(e.target.value)}
+                        placeholder="kanhasidhi@gmail.com"
+                        className="w-full px-3 py-2 text-xs font-mono bg-neutral-50 dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-700 rounded-lg"
+                      />
+                      <span className="text-[10px] text-neutral-400 block">
+                        Visible to customer
+                      </span>
                     </div>
                   </div>
 

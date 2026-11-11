@@ -226,6 +226,7 @@ export interface CreatorConfig {
   creatorPasswordHash: string;
   vendorName: string;
   vendorPhone: string;
+  vendorEmail?: string;
   failedAttempts: number;
   lockoutUntil: string | null;
 }

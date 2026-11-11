@@ -179,7 +179,9 @@ interface AppContextType {
   }) => GeneratedKeyRecord;
   deleteGeneratedKey: (id: string) => void;
   creatorConfig: CreatorConfig;
-  updateCreatorConfig: (updates: Partial<Pick<CreatorConfig, 'vendorName' | 'vendorPhone'>>) => void;
+  updateCreatorConfig: (
+    updates: Partial<Pick<CreatorConfig, 'vendorName' | 'vendorPhone' | 'vendorEmail'>>
+  ) => void;
   verifyCreatorCredentials: (
     creatorId: string,
     password: string
@@ -1741,7 +1743,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCreatorConfig = (
-    updates: Partial<Pick<CreatorConfig, 'vendorName' | 'vendorPhone'>>
+    updates: Partial<Pick<CreatorConfig, 'vendorName' | 'vendorPhone' | 'vendorEmail'>>
   ) => {
     setCreatorConfig(prev => ({ ...prev, ...updates }));
   };

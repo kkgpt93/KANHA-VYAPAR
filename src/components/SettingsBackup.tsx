@@ -18,11 +18,22 @@ import {
   Sun,
   Moon,
   Check,
+  ExternalLink,
+  MessageSquare,
+  Mail,
+  LifeBuoy,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { StoreSettings } from '../types';
 import { formatDate } from '../utils/formatters';
 import { COLOR_THEMES } from '../utils/themes';
+import {
+  DEFAULT_CUSTOMER_SUPPORT_EMAIL,
+  DEFAULT_LICENSE_TARGET_PHONE,
+  buildLicenseRenewalRequestText,
+  buildLicenseWhatsAppUrl,
+  buildLicenseSmsUrl,
+} from '../utils/license';
 import { GstSlabManagerPanel } from './GstSlabManagerModal';
 
 export const SettingsBackup: React.FC = () => {
@@ -44,7 +55,19 @@ export const SettingsBackup: React.FC = () => {
     setColorTheme,
     isDarkMode,
     toggleDarkMode,
+    creatorConfig,
   } = useApp();
+
+  const renewalText = buildLicenseRenewalRequestText({
+    storeName: settings.storeName,
+    installationId: licenseState.installationId,
+    activeKey: licenseState.activeKey,
+    storePhone: settings.phone,
+  });
+  const targetPhone = creatorConfig.vendorPhone || DEFAULT_LICENSE_TARGET_PHONE;
+  const whatsappHref = buildLicenseWhatsAppUrl(renewalText, targetPhone);
+  const smsHref = buildLicenseSmsUrl(renewalText, targetPhone);
+  const supportEmail = creatorConfig.vendorEmail || DEFAULT_CUSTOMER_SUPPORT_EMAIL;
 
   const [formData, setFormData] = useState<StoreSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -231,38 +254,75 @@ export const SettingsBackup: React.FC = () => {
           </div>
         </div>
 
-        {/* Annual Software License & Keygen Quick Card */}
-        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center">
-              <KeyRound className="w-5 h-5" />
+        {/* Annual Software License & Customer Support Card */}
+        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center shrink-0">
+                <KeyRound className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
+                  {licenseEvaluation.isCreatorLifetime
+                    ? 'Creator Lifetime License (Always Valid — Unlimited)'
+                    : licenseEvaluation.isPublicTrial
+                    ? `2-Day Public License (${licenseEvaluation.hoursRemaining} Hours Remaining)`
+                    : `Annual Software License (${licenseEvaluation.daysRemaining} Days Remaining)`}
+                </h3>
+                <p className="text-xs text-neutral-500 font-mono tabular-nums">
+                  System ID: {licenseState.installationId}
+                  {licenseEvaluation.isCreatorLifetime
+                    ? ' · Valid Until: Never Expires'
+                    : licenseState.expiresAt
+                    ? ` · Valid Until: ${formatDate(licenseState.expiresAt)}`
+                    : ''}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
-                {licenseEvaluation.isCreatorLifetime
-                  ? 'Creator Lifetime License (Always Valid — Unlimited)'
-                  : licenseEvaluation.isPublicTrial
-                  ? `2-Day Public License (${licenseEvaluation.hoursRemaining} Hours Remaining)`
-                  : `Annual Software License (${licenseEvaluation.daysRemaining} Days Remaining)`}
-              </h3>
-              <p className="text-xs text-neutral-500 font-mono tabular-nums">
-                System ID: {licenseState.installationId}
-                {licenseEvaluation.isCreatorLifetime
-                  ? ' · Valid Until: Never Expires'
-                  : licenseState.expiresAt
-                  ? ` · Valid Until: ${formatDate(licenseState.expiresAt)}`
-                  : ''}
-              </p>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('license')}
+              className="px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 transition-opacity cursor-pointer shrink-0"
+            >
+              Manage License & Keygen
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('license')}
-            className="px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 transition-opacity cursor-pointer"
-          >
-            Manage License & Keygen
-          </button>
+          <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <LifeBuoy className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="font-medium text-neutral-700 dark:text-neutral-300">Customer Support:</span>
+              <a
+                href={`mailto:${supportEmail}`}
+                className="font-mono font-bold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>{supportEmail}</span>
+              </a>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <a
+                href={whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors"
+                title="Send 1-Year License Request via WhatsApp"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>WhatsApp पर 1-साल की लाइसेंस की मांगें</span>
+              </a>
+              <a
+                href={smsHref}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 shadow-2xs transition-colors"
+                title="Send 1-Year License Request via SMS"
+              >
+                <MessageSquare className="w-3 h-3" />
+                <span>SMS पर मांगें</span>
+              </a>
+            </div>
+          </div>
         </div>
 
         {/* Offline & System Sync Status Card */}
