@@ -22,9 +22,14 @@ import {
   MessageSquare,
   Mail,
   LifeBuoy,
+  Cloud,
+  RefreshCw,
+  LogOut,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useAuth } from '../context/AuthContext';
 import { StoreSettings } from '../types';
+import { SupabaseAuthModal } from './SupabaseAuthModal';
 import { formatDate } from '../utils/formatters';
 import { COLOR_THEMES } from '../utils/themes';
 import {
@@ -56,7 +61,13 @@ export const SettingsBackup: React.FC = () => {
     isDarkMode,
     toggleDarkMode,
     creatorConfig,
+    cloudSyncing,
+    cloudSyncError,
+    lastSyncedAt,
+    syncNowToCloud,
   } = useApp();
+  const { authUser, authBusy, authError, signOutUser } = useAuth();
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const renewalText = buildLicenseRenewalRequestText({
     storeName: settings.storeName,
@@ -325,29 +336,80 @@ export const SettingsBackup: React.FC = () => {
           </div>
         </div>
 
-        {/* Offline & System Sync Status Card */}
-        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div
-              className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                isOffline
-                  ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-600'
-                  : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600'
-              }`}
-            >
-              {isOffline ? <WifiOff className="w-5 h-5" /> : <Wifi className="w-5 h-5" />}
+        {/* Cloud Account & Offline Sync Card */}
+        <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                  isOffline
+                    ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-600'
+                    : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600'
+                }`}
+              >
+                {isOffline ? <WifiOff className="w-5 h-5" /> : <Cloud className="w-5 h-5" />}
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                  {authUser
+                    ? `Supabase Cloud Sync Active (${authUser.email || authUser.displayName})`
+                    : isOffline
+                    ? 'Offline Mode Active'
+                    : 'Online & Local Backup Ready'}
+                </h3>
+                <p className="text-xs text-neutral-500">
+                  {authUser
+                    ? lastSyncedAt
+                      ? `आपका पूरा स्टोर डेटा (इन्वेंट्री, ग्राहक, बिल, GST और लाइसेंस) Supabase क्लाउड में सुरक्षित है। Last sync: ${new Date(
+                          lastSyncedAt
+                        ).toLocaleTimeString('en-IN')}`
+                      : 'आपका स्टोर डेटा आपके Supabase अकाउंट के साथ ऑटोमैटिक सिंक हो रहा है।'
+                    : 'दूसरे डिवाइस से एक्सेस और सुरक्षित क्लाउड बैकअप के लिए Supabase से साइन-इन करें। ऑफ़लाइन मोड भी हमेशा काम करता है।'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
-                {isOffline ? 'Offline Mode Active' : 'Online & Synchronized'}
-              </h3>
-              <p className="text-xs text-neutral-500">
-                {isOffline
-                  ? 'Bills and stock changes are saved in local storage. Automatic sync on reconnection.'
-                  : 'Local database is 100% functional offline with zero cloud dependency.'}
-              </p>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {authUser ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={cloudSyncing || isOffline}
+                    onClick={() => void syncNowToCloud()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${cloudSyncing ? 'animate-spin' : ''}`} />
+                    <span>{cloudSyncing ? 'Syncing...' : 'Sync Now'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() => void signOutUser()}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={authBusy || isOffline}
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-60"
+                >
+                  <Wifi className="w-3.5 h-3.5" />
+                  <span>Sign in with Supabase</span>
+                </button>
+              )}
             </div>
           </div>
+
+          {(authError || cloudSyncError) && (
+            <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-300">
+              {authError || cloudSyncError}
+            </div>
+          )}
         </div>
 
         {/* Multi-Slab & Custom GST Configuration Card */}
@@ -691,6 +753,10 @@ export const SettingsBackup: React.FC = () => {
           </div>
         </div>
       </div>
+      <SupabaseAuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+      />
     </div>
   );
 };

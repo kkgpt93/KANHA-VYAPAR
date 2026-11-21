@@ -17,8 +17,11 @@ import {
   MessageSquare,
   Mail,
   LifeBuoy,
+  Cloud,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useAuth } from '../context/AuthContext';
+import { SupabaseAuthModal } from './SupabaseAuthModal';
 import {
   formatLicenseKeyInput,
   PUBLIC_LOGIN_ID,
@@ -49,7 +52,10 @@ export const LicenseGateModal: React.FC = () => {
     generateNewLicenseKey,
     colorTheme,
     setColorTheme,
+    cloudSyncing,
   } = useApp();
+  const { authUser, authBusy, authError, signOutUser } = useAuth();
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const isPublicExpired =
     licenseState.publicTrialUsed &&
@@ -388,8 +394,54 @@ export const LicenseGateModal: React.FC = () => {
 
           {/* Right Panel: 3-Mode Login & Activation Switcher */}
           <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between gap-5">
-            {/* Compact Color Swatch Selector + Segmented Mode Tabs */}
+            {/* Compact Supabase Account Restore Bar + Theme Swatches + Mode Tabs */}
             <div className="space-y-3">
+              <div className="p-2.5 rounded-xl bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                {authUser ? (
+                  <>
+                    <div className="min-w-0">
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        Signed in:{' '}
+                      </span>
+                      <span className="text-neutral-700 dark:text-neutral-300 truncate">
+                        {authUser.email}
+                      </span>
+                      {cloudSyncing && (
+                        <span className="ml-2 text-[11px] text-neutral-500">Syncing...</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void signOutUser()}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                    >
+                      Switch Account
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[11px] text-neutral-600 dark:text-neutral-400">
+                      पुराना स्टोर डेटा और लाइसेंस वापस पाने के लिए Supabase से साइन-इन करें
+                    </span>
+                    <button
+                      type="button"
+                      disabled={authBusy}
+                      onClick={() => setIsAuthModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:opacity-90 cursor-pointer disabled:opacity-60"
+                    >
+                      <Cloud className="w-3.5 h-3.5" />
+                      <span>Sign in with Supabase</span>
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {authError && (
+                <div className="px-3 py-2 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-[11px] text-rose-700 dark:text-rose-300">
+                  {authError}
+                </div>
+              )}
+
               <div className="flex items-center justify-between text-[11px] text-neutral-500">
                 <span>Select Access Mode</span>
                 <div className="flex items-center gap-1.5">
@@ -928,6 +980,10 @@ export const LicenseGateModal: React.FC = () => {
           </div>
         </div>
       </div>
+      <SupabaseAuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+      />
     </div>
   );
 };

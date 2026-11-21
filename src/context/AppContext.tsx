@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Product,
   Invoice,
@@ -20,10 +20,12 @@ import {
   GstSlabConfig,
   DiscountMode,
 } from '../types';
-import { StorageService } from '../utils/storage';
+import { CLEAN_DEFAULT_SETTINGS, CLEAN_DEFAULT_USERS, StorageService } from '../utils/storage';
 import { generateInvoiceNumber } from '../utils/formatters';
 import { soundManager } from '../utils/audio';
 import { COLOR_THEMES, DEFAULT_COLOR_THEME } from '../utils/themes';
+import { useAuth } from './AuthContext';
+import { StoreApiClient } from '../utils/apiClient';
 import {
   DEFAULT_GST_SLABS,
   calculateLineGst,
@@ -194,11 +196,18 @@ interface AppContextType {
   simulateLicenseExpiry: () => void;
   simulateLicenseExpiringSoon: () => void;
   simulatePublicTrialExpiry: () => void;
+  // Cloud account synchronization
+  cloudSyncing: boolean;
+  cloudSyncError: string | null;
+  lastSyncedAt: string | null;
+  clearCloudSyncError: () => void;
+  syncNowToCloud: () => Promise<boolean>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { authUser, getAuthHeaders } = useAuth();
   const [products, setProducts] = useState<Product[]>(() => StorageService.getProducts());
   const [invoices, setInvoices] = useState<Invoice[]>(() => StorageService.getInvoices());
   const [customers, setCustomers] = useState<Customer[]>(() => StorageService.getCustomers());
@@ -212,6 +221,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedPosCustomer, setSelectedPosCustomer] = useState<Customer | null>(null);
   const [isLocked, setIsLocked] = useState<boolean>(false);
   const [isOffline, setIsOffline] = useState<boolean>(typeof navigator !== 'undefined' ? !navigator.onLine : false);
+  const [cloudSyncing, setCloudSyncing] = useState<boolean>(false);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const syncedUidRef = useRef<string | null>(null);
 
   const routeEntryAction = useCallback((action: QuickEntryAction, updateHistory = false) => {
     if (action === 'setup-hub') {
@@ -333,9 +346,211 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [colorTheme]);
 
-  const setColorTheme = useCallback((theme: ColorThemeId) => {
-    setColorThemeState(theme);
+  const setColorTheme = useCallback(
+    (theme: ColorThemeId) => {
+      setColorThemeState(theme);
+      if (authUser) {
+        void StoreApiClient.saveSettings(settings, theme, getAuthHeaders).catch(() => {});
+      }
+    },
+    [authUser, getAuthHeaders, settings]
+  );
+
+  const clearCloudSyncError = useCallback(() => {
+    setCloudSyncError(null);
   }, []);
+
+  const stateRef = useRef({
+    settings,
+    colorTheme,
+    products,
+    customers,
+    invoices,
+    users,
+    notifications,
+    licenseState,
+    generatedKeys,
+    creatorConfig,
+  });
+
+  stateRef.current = {
+    settings,
+    colorTheme,
+    products,
+    customers,
+    invoices,
+    users,
+    notifications,
+    licenseState,
+    generatedKeys,
+    creatorConfig,
+  };
+
+  const syncNowToCloud = useCallback(async (): Promise<boolean> => {
+    if (!authUser) return false;
+    setCloudSyncing(true);
+    setCloudSyncError(null);
+    try {
+      const s = stateRef.current;
+      await StoreApiClient.syncAll(
+        {
+          settings: s.settings,
+          colorTheme: s.colorTheme,
+          products: s.products,
+          customers: s.customers,
+          invoices: s.invoices,
+          staffUsers: s.users,
+          notifications: s.notifications,
+          licenseState: s.licenseState,
+          generatedKeys: s.generatedKeys,
+          creatorConfig: s.creatorConfig,
+        },
+        getAuthHeaders
+      );
+      setLastSyncedAt(new Date().toISOString());
+      return true;
+    } catch {
+      setCloudSyncError('क्लाउड सिंक अस्थायी रूप से उपलब्ध नहीं है। आपका लोकल डेटा सुरक्षित है।');
+      return false;
+    } finally {
+      setCloudSyncing(false);
+    }
+  }, [authUser, getAuthHeaders]);
+
+  // Bootstrap and synchronize store state when a user signs in with Google
+  useEffect(() => {
+    if (!authUser) {
+      syncedUidRef.current = null;
+      setCloudSyncError(null);
+      return;
+    }
+
+    if (syncedUidRef.current === authUser.uid) {
+      return;
+    }
+    syncedUidRef.current = authUser.uid;
+
+    let cancelled = false;
+    const bootstrap = async () => {
+      setCloudSyncing(true);
+      setCloudSyncError(null);
+      try {
+        const cloud = await StoreApiClient.bootstrap(getAuthHeaders);
+        if (cancelled) return;
+
+        const local = stateRef.current;
+        if (cloud.hasCloudData) {
+          if (cloud.settings) {
+            setSettings({
+              ...CLEAN_DEFAULT_SETTINGS,
+              ...cloud.settings,
+              gstSlabs: normalizeGstSlabs(cloud.settings.gstSlabs),
+              gstSupplyType:
+                cloud.settings.gstSupplyType === 'interstate' ? 'interstate' : 'intrastate',
+              gstPriceMode:
+                cloud.settings.gstPriceMode === 'inclusive' ? 'inclusive' : 'exclusive',
+              social: {
+                ...CLEAN_DEFAULT_SETTINGS.social,
+                ...(cloud.settings.social || {}),
+              },
+            });
+          }
+          if (cloud.colorTheme && COLOR_THEMES.some(t => t.id === cloud.colorTheme)) {
+            setColorThemeState(cloud.colorTheme);
+          }
+
+          const cloudHasCoreData =
+            cloud.products.length > 0 ||
+            cloud.customers.length > 0 ||
+            cloud.invoices.length > 0;
+          const localHasCoreData =
+            local.products.length > 0 ||
+            local.customers.length > 0 ||
+            local.invoices.length > 0;
+
+          if (cloudHasCoreData) {
+            setProducts(cloud.products);
+            setCustomers(cloud.customers);
+            setInvoices(cloud.invoices);
+          } else if (localHasCoreData) {
+            await StoreApiClient.syncAll(
+              {
+                settings: cloud.settings || local.settings,
+                colorTheme: cloud.colorTheme || local.colorTheme,
+                products: local.products,
+                customers: local.customers,
+                invoices: local.invoices,
+                staffUsers: cloud.staffUsers.length > 0 ? cloud.staffUsers : local.users,
+                notifications:
+                  cloud.notifications.length > 0 ? cloud.notifications : local.notifications,
+                licenseState:
+                  cloud.licenseRecord &&
+                  cloud.licenseRecord.licenseState.accessMode !== 'unactivated'
+                    ? cloud.licenseRecord.licenseState
+                    : local.licenseState,
+                generatedKeys: cloud.licenseRecord?.generatedKeys || local.generatedKeys,
+                creatorConfig: cloud.licenseRecord?.creatorConfig || local.creatorConfig,
+              },
+              getAuthHeaders
+            );
+          }
+
+          if (cloud.staffUsers.length > 0) {
+            setUsers(cloud.staffUsers);
+            setActiveUser(cloud.staffUsers[0]);
+          }
+          if (cloud.notifications.length > 0) {
+            setNotifications(cloud.notifications);
+          }
+          if (cloud.licenseRecord) {
+            const shouldKeepLocalLicense =
+              cloud.licenseRecord.licenseState.accessMode === 'unactivated' &&
+              local.licenseState.accessMode !== 'unactivated';
+            if (!shouldKeepLocalLicense) {
+              setLicenseState(cloud.licenseRecord.licenseState);
+            }
+            if (cloud.licenseRecord.generatedKeys.length > 0) {
+              setGeneratedKeys(cloud.licenseRecord.generatedKeys);
+            }
+            setCreatorConfig(cloud.licenseRecord.creatorConfig);
+          }
+        } else {
+          await StoreApiClient.syncAll(
+            {
+              settings: local.settings,
+              colorTheme: local.colorTheme,
+              products: local.products,
+              customers: local.customers,
+              invoices: local.invoices,
+              staffUsers: local.users,
+              notifications: local.notifications,
+              licenseState: local.licenseState,
+              generatedKeys: local.generatedKeys,
+              creatorConfig: local.creatorConfig,
+            },
+            getAuthHeaders
+          );
+        }
+
+        if (!cancelled) {
+          setLastSyncedAt(new Date().toISOString());
+        }
+      } catch {
+        if (!cancelled) {
+          setCloudSyncError('क्लाउड डेटा लोड नहीं हो सका। लोकल मोड जारी है।');
+        }
+      } finally {
+        if (!cancelled) {
+          setCloudSyncing(false);
+        }
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser, getAuthHeaders]);
 
   // Sync sound manager setting
   useEffect(() => {
@@ -410,6 +625,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setNotifications(prev => [newNotif, ...prev]);
 
+    if (authUser) {
+      void StoreApiClient.upsertNotification(newNotif, getAuthHeaders).catch(() => {});
+    }
+
     // Push notification if permitted
     if (settings.enablePushNotifications && typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'granted') {
@@ -423,7 +642,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     }
-  }, [settings.enablePushNotifications]);
+  }, [authUser, getAuthHeaders, settings.enablePushNotifications]);
 
   // Request browser push permission
   const requestPushPermission = async (): Promise<boolean> => {
@@ -442,6 +661,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     };
     setProducts(prev => [newProduct, ...prev]);
+    if (authUser) {
+      void StoreApiClient.upsertProduct(newProduct, getAuthHeaders).catch(() => {});
+    }
     addNotification({
       title: 'New Product Added',
       message: `${newProduct.name} has been added to inventory catalog.`,
@@ -452,13 +674,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateProduct = (id: string, updates: Partial<Product>) => {
+    const nowIso = new Date().toISOString();
+    const current = stateRef.current.products.find(p => p.id === id);
+    if (current && authUser) {
+      void StoreApiClient.upsertProduct({ ...current, ...updates, updatedAt: nowIso }, getAuthHeaders).catch(() => {});
+    }
     setProducts(prev =>
       prev.map(p => {
         if (p.id === id) {
           return {
             ...p,
             ...updates,
-            updatedAt: new Date().toISOString(),
+            updatedAt: nowIso,
           };
         }
         return p;
@@ -468,6 +695,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
+    if (authUser) {
+      void StoreApiClient.deleteProduct(id, getAuthHeaders).catch(() => {});
+    }
   };
 
   // Customer Management Functions
@@ -480,6 +710,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     };
     setCustomers(prev => [newCustomer, ...prev]);
+    if (authUser) {
+      void StoreApiClient.upsertCustomer(newCustomer, getAuthHeaders).catch(() => {});
+    }
     addNotification({
       title: 'Customer Added',
       message: `${newCustomer.name} (${newCustomer.phone}) added to customer directory.`,
@@ -489,13 +722,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCustomer = (id: string, updates: Partial<Customer>) => {
+    const nowIso = new Date().toISOString();
+    const current = stateRef.current.customers.find(c => c.id === id);
+    if (current && authUser) {
+      void StoreApiClient.upsertCustomer({ ...current, ...updates, updatedAt: nowIso }, getAuthHeaders).catch(() => {});
+    }
     setCustomers(prev =>
       prev.map(c => {
         if (c.id === id) {
           return {
             ...c,
             ...updates,
-            updatedAt: new Date().toISOString(),
+            updatedAt: nowIso,
           };
         }
         return c;
@@ -507,6 +745,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomers(prev => prev.filter(c => c.id !== id));
     if (selectedPosCustomer?.id === id) {
       setSelectedPosCustomer(null);
+    }
+    if (authUser) {
+      void StoreApiClient.deleteCustomer(id, getAuthHeaders).catch(() => {});
     }
   };
 
@@ -522,6 +763,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adjustStock = (id: string, delta: number, reason?: string) => {
+    const nowIso = new Date().toISOString();
+    const target = stateRef.current.products.find(p => p.id === id);
+    if (target && authUser) {
+      const nextStock = Math.max(0, target.stock + delta);
+      void StoreApiClient.upsertProduct(
+        { ...target, stock: nextStock, updatedAt: nowIso },
+        getAuthHeaders
+      ).catch(() => {});
+    }
     setProducts(prev =>
       prev.map(p => {
         if (p.id === id) {
@@ -538,7 +788,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return {
             ...p,
             stock: newStock,
-            updatedAt: new Date().toISOString(),
+            updatedAt: nowIso,
           };
         }
         return p;
@@ -895,6 +1145,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Add Invoice
     setInvoices(prev => [newInvoice, ...prev]);
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(newInvoice, getAuthHeaders).catch(() => {});
+    }
 
     // 3. Clear Cart & selected customer
     clearCart();
@@ -984,6 +1237,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const recalculated = recalculateInvoiceWithItems(seededInv, existingInv.items);
     setInvoices(prev => prev.map(i => (i.id === invoiceId ? recalculated : i)));
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(recalculated, getAuthHeaders).catch(() => {});
+    }
     return recalculated;
   };
 
@@ -1081,6 +1337,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
 
     setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(updatedInvoice, getAuthHeaders).catch(() => {});
+    }
     soundManager.playScanBeep();
     addNotification({
       title: `Item Added to ${existingInv.invoiceNumber}`,
@@ -1145,6 +1404,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
     setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(updatedInvoice, getAuthHeaders).catch(() => {});
+    }
     return updatedInvoice;
   };
 
@@ -1182,6 +1444,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const updatedInvoice = recalculateInvoiceWithItems(existingInv, updatedItems);
     setInvoices(prev => prev.map(i => (i.id === invoiceId ? updatedInvoice : i)));
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(updatedInvoice, getAuthHeaders).catch(() => {});
+    }
     return updatedInvoice;
   };
 
@@ -1351,6 +1616,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setInvoices(prev => [newInvoice, ...prev]);
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(newInvoice, getAuthHeaders).catch(() => {});
+    }
     soundManager.playSuccessChime();
     addNotification({
       title: `Invoice Created (${newInvoice.paymentMethod.toUpperCase()})`,
@@ -1374,9 +1642,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
+    const refundedInvoice: Invoice = { ...inv, status: 'refunded' };
     setInvoices(prev =>
-      prev.map(i => (i.id === invoiceId ? { ...i, status: 'refunded' } : i))
+      prev.map(i => (i.id === invoiceId ? refundedInvoice : i))
     );
+    if (authUser) {
+      void StoreApiClient.upsertInvoice(refundedInvoice, getAuthHeaders).catch(() => {});
+    }
 
     addNotification({
       title: 'Invoice Refunded',
@@ -1401,9 +1673,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `usr-${Date.now()}`,
     };
     setUsers(prev => [...prev, newUser]);
+    if (authUser) {
+      void StoreApiClient.upsertStaffUser(newUser, getAuthHeaders).catch(() => {});
+    }
   };
 
   const updateUser = (userId: string, updates: Partial<User>) => {
+    const current = stateRef.current.users.find(u => u.id === userId);
+    if (current && authUser) {
+      void StoreApiClient.upsertStaffUser({ ...current, ...updates }, getAuthHeaders).catch(() => {});
+    }
     setUsers(prev =>
       prev.map(u => (u.id === userId ? { ...u, ...updates } : u))
     );
@@ -1417,6 +1696,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(prev => prev.filter(u => u.id !== userId));
     if (activeUser.id === userId) {
       setActiveUser(users.find(u => u.id !== userId) || users[0]);
+    }
+    if (authUser) {
+      void StoreApiClient.deleteStaffUser(userId, getAuthHeaders).catch(() => {});
     }
   };
 
@@ -1447,12 +1729,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const registerBiometricsForUser = async (userId: string): Promise<boolean> => {
-    setUsers(prev =>
-      prev.map(u => (u.id === userId ? { ...u, hasBiometrics: true } : u))
-    );
-    if (activeUser.id === userId) {
-      setActiveUser(prev => ({ ...prev, hasBiometrics: true }));
-    }
+    updateUser(userId, { hasBiometrics: true });
     return true;
   };
 
@@ -1461,10 +1738,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, read: true } : n))
     );
+    if (authUser) {
+      void StoreApiClient.markNotificationRead(id, getAuthHeaders).catch(() => {});
+    }
   };
 
   const clearNotifications = () => {
     setNotifications([]);
+    if (authUser) {
+      void StoreApiClient.clearNotifications(getAuthHeaders).catch(() => {});
+    }
   };
 
   // GST Slab Management & Settings
@@ -1505,58 +1788,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedSlabs = normalizeGstSlabs([...currentSlabs, resultSlab]);
     }
 
-    setSettings(prev => ({
-      ...prev,
+    const nextSettings: StoreSettings = {
+      ...settings,
       gstSlabs: updatedSlabs,
-      defaultTaxRate: params.setAsDefault ? cleanRate : prev.defaultTaxRate,
-    }));
+      defaultTaxRate: params.setAsDefault ? cleanRate : settings.defaultTaxRate,
+    };
+    setSettings(nextSettings);
+    if (authUser) {
+      void StoreApiClient.saveSettings(nextSettings, colorTheme, getAuthHeaders).catch(() => {});
+    }
 
     return resultSlab;
   };
 
   const toggleGstSlab = (slabId: string) => {
-    setSettings(prev => {
-      const currentSlabs = normalizeGstSlabs(prev.gstSlabs);
-      const enabledCount = currentSlabs.filter(s => s.enabled).length;
-      const updated = currentSlabs.map(s => {
-        if (s.id !== slabId) return s;
-        if (s.enabled && enabledCount <= 1) return s; // keep at least 1 active slab
-        return { ...s, enabled: !s.enabled };
-      });
-      return { ...prev, gstSlabs: updated };
+    const currentSlabs = normalizeGstSlabs(settings.gstSlabs);
+    const enabledCount = currentSlabs.filter(s => s.enabled).length;
+    const updated = currentSlabs.map(s => {
+      if (s.id !== slabId) return s;
+      if (s.enabled && enabledCount <= 1) return s;
+      return { ...s, enabled: !s.enabled };
     });
+    const nextSettings: StoreSettings = { ...settings, gstSlabs: updated };
+    setSettings(nextSettings);
+    if (authUser) {
+      void StoreApiClient.saveSettings(nextSettings, colorTheme, getAuthHeaders).catch(() => {});
+    }
   };
 
   const deleteGstSlab = (slabId: string) => {
-    setSettings(prev => {
-      const currentSlabs = normalizeGstSlabs(prev.gstSlabs);
-      if (currentSlabs.length <= 1) return prev;
-      const updated = currentSlabs.filter(s => s.id !== slabId);
-      const activeRates = updated.filter(s => s.enabled).map(s => s.rate);
-      const nextDefault = activeRates.includes(prev.defaultTaxRate)
-        ? prev.defaultTaxRate
-        : (activeRates[0] ?? updated[0].rate);
-      return {
-        ...prev,
-        gstSlabs: updated,
-        defaultTaxRate: nextDefault,
-      };
-    });
+    const currentSlabs = normalizeGstSlabs(settings.gstSlabs);
+    if (currentSlabs.length <= 1) return;
+    const updated = currentSlabs.filter(s => s.id !== slabId);
+    const activeRates = updated.filter(s => s.enabled).map(s => s.rate);
+    const nextDefault = activeRates.includes(settings.defaultTaxRate)
+      ? settings.defaultTaxRate
+      : (activeRates[0] ?? updated[0].rate);
+    const nextSettings: StoreSettings = {
+      ...settings,
+      gstSlabs: updated,
+      defaultTaxRate: nextDefault,
+    };
+    setSettings(nextSettings);
+    if (authUser) {
+      void StoreApiClient.saveSettings(nextSettings, colorTheme, getAuthHeaders).catch(() => {});
+    }
   };
 
   const resetGstSlabsToDefault = () => {
-    setSettings(prev => ({
-      ...prev,
+    const nextSettings: StoreSettings = {
+      ...settings,
       gstSlabs: DEFAULT_GST_SLABS,
       defaultTaxRate: 5,
-    }));
+    };
+    setSettings(nextSettings);
+    if (authUser) {
+      void StoreApiClient.saveSettings(nextSettings, colorTheme, getAuthHeaders).catch(() => {});
+    }
   };
 
   const updateSettings = (newSettings: StoreSettings) => {
-    setSettings({
+    const normalized: StoreSettings = {
       ...newSettings,
       gstSlabs: normalizeGstSlabs(newSettings.gstSlabs),
-    });
+    };
+    setSettings(normalized);
+    if (authUser) {
+      void StoreApiClient.saveSettings(normalized, colorTheme, getAuthHeaders).catch(() => {});
+    }
   };
 
   // Clean / Wipe all store data back to zero
@@ -1566,12 +1865,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setInvoices([]);
     setCustomers([]);
     const freshUsers = StorageService.getUsers();
+    const freshSettings = StorageService.getSettings();
     setUsers(freshUsers);
     setActiveUser(freshUsers[0]);
-    setSettings(StorageService.getSettings());
+    setSettings(freshSettings);
     setNotifications([]);
     setCart([]);
     setSelectedPosCustomer(null);
+    if (authUser) {
+      void StoreApiClient.clearAllStoreData(
+        {
+          settings: freshSettings,
+          colorTheme,
+          staffUsers: freshUsers.length > 0 ? freshUsers : CLEAN_DEFAULT_USERS,
+        },
+        getAuthHeaders
+      ).catch(() => {});
+    }
   };
 
   const exportBackup = (): string => {
@@ -1581,12 +1891,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importBackup = (json: string): boolean => {
     const success = StorageService.importFullBackup(json);
     if (success) {
-      setProducts(StorageService.getProducts());
-      setInvoices(StorageService.getInvoices());
-      setCustomers(StorageService.getCustomers());
-      setUsers(StorageService.getUsers());
-      setSettings(StorageService.getSettings());
-      setNotifications(StorageService.getNotifications());
+      const nextProducts = StorageService.getProducts();
+      const nextInvoices = StorageService.getInvoices();
+      const nextCustomers = StorageService.getCustomers();
+      const nextUsers = StorageService.getUsers();
+      const nextSettings = StorageService.getSettings();
+      const nextNotifications = StorageService.getNotifications();
+      setProducts(nextProducts);
+      setInvoices(nextInvoices);
+      setCustomers(nextCustomers);
+      setUsers(nextUsers);
+      setSettings(nextSettings);
+      setNotifications(nextNotifications);
+      if (authUser) {
+        void StoreApiClient.syncAll(
+          {
+            settings: nextSettings,
+            colorTheme,
+            products: nextProducts,
+            customers: nextCustomers,
+            invoices: nextInvoices,
+            staffUsers: nextUsers,
+            notifications: nextNotifications,
+            licenseState: stateRef.current.licenseState,
+            generatedKeys: stateRef.current.generatedKeys,
+            creatorConfig: stateRef.current.creatorConfig,
+          },
+          getAuthHeaders
+        ).catch(() => {});
+      }
     }
     return success;
   };
@@ -1623,6 +1956,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const licenseEvaluation = evaluateLicenseStatus(licenseState);
 
+  const syncLicensePayload = useCallback(
+    (
+      nextLicenseState: LicenseState,
+      nextGeneratedKeys: GeneratedKeyRecord[] = stateRef.current.generatedKeys,
+      nextCreatorConfig: CreatorConfig = stateRef.current.creatorConfig
+    ) => {
+      if (authUser) {
+        void StoreApiClient.saveLicenseRecord(
+          {
+            licenseState: nextLicenseState,
+            generatedKeys: nextGeneratedKeys,
+            creatorConfig: nextCreatorConfig,
+          },
+          getAuthHeaders
+        ).catch(() => {});
+      }
+    },
+    [authUser, getAuthHeaders]
+  );
+
   const activateLicenseKey = (rawKey: string): { ok: boolean; message: string } => {
     if (canonicalizeLicenseKey(rawKey) === PUBLIC_2DAY_LICENSE_KEY) {
       const pubRes = activatePublicTrialState(licenseState, rawKey, activeUser.name);
@@ -1631,6 +1984,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, message: pubRes.message };
       }
       setLicenseState(pubRes.updatedState);
+      syncLicensePayload(pubRes.updatedState);
       soundManager.playSuccessChime();
       addNotification({
         title: '2-Day Public License Activated',
@@ -1661,6 +2015,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     setLicenseState(updated);
+    syncLicensePayload(updated);
     soundManager.playSuccessChime();
     addNotification({
       title: 'License Activated / Renewed',
@@ -1701,6 +2056,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setLicenseState(pubRes.updatedState);
+    syncLicensePayload(pubRes.updatedState);
     soundManager.playSuccessChime();
     addNotification({
       title: 'Public Login Active (2 Days)',
@@ -1734,18 +2090,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notes: params.notes?.trim() || '',
     };
 
-    setGeneratedKeys(prev => [record, ...prev]);
+    const nextKeys = [record, ...generatedKeys];
+    setGeneratedKeys(nextKeys);
+    syncLicensePayload(stateRef.current.licenseState, nextKeys, stateRef.current.creatorConfig);
     return record;
   };
 
   const deleteGeneratedKey = (id: string) => {
-    setGeneratedKeys(prev => prev.filter(k => k.id !== id));
+    const nextKeys = generatedKeys.filter(k => k.id !== id);
+    setGeneratedKeys(nextKeys);
+    syncLicensePayload(stateRef.current.licenseState, nextKeys, stateRef.current.creatorConfig);
   };
 
   const updateCreatorConfig = (
     updates: Partial<Pick<CreatorConfig, 'vendorName' | 'vendorPhone' | 'vendorEmail'>>
   ) => {
-    setCreatorConfig(prev => ({ ...prev, ...updates }));
+    const nextCreator = { ...creatorConfig, ...updates };
+    setCreatorConfig(nextCreator);
+    syncLicensePayload(stateRef.current.licenseState, stateRef.current.generatedKeys, nextCreator);
   };
 
   const verifyCreatorCredentials = (
@@ -1892,7 +2254,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    setLicenseState(prev => activateCreatorLifetimeState(prev));
+    const nextLicense = activateCreatorLifetimeState(licenseState);
+    setLicenseState(nextLicense);
+    syncLicensePayload(nextLicense);
     addNotification({
       title: 'Creator Always-Valid Mode Active',
       message: 'Creator authenticated. Software validity is set to Always Valid (Unlimited).',
@@ -1905,19 +2269,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const enableCreatorLifetimeMode = () => {
-    setLicenseState(prev => activateCreatorLifetimeState(prev));
+    const nextLicense = activateCreatorLifetimeState(licenseState);
+    setLicenseState(nextLicense);
+    syncLicensePayload(nextLicense);
     soundManager.playSuccessChime();
   };
 
   const exitCreatorLifetimeMode = () => {
-    setLicenseState(prev => exitCreatorLifetimeState(prev));
+    const nextLicense = exitCreatorLifetimeState(licenseState);
+    setLicenseState(nextLicense);
+    syncLicensePayload(nextLicense);
   };
 
   const openLoginGateScreen = () => {
-    setLicenseState(prev => ({
-      ...prev,
+    const nextLicense: LicenseState = {
+      ...licenseState,
       accessMode: 'unactivated',
-    }));
+    };
+    setLicenseState(nextLicense);
+    syncLicensePayload(nextLicense);
   };
 
   // Simulation helpers for testing 1-year expiry, 2-day public expiry & renewal gate immediately
@@ -2062,6 +2432,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         simulateLicenseExpiry,
         simulateLicenseExpiringSoon,
         simulatePublicTrialExpiry,
+        cloudSyncing,
+        cloudSyncError,
+        lastSyncedAt,
+        clearCloudSyncError,
+        syncNowToCloud,
       }}
     >
       {children}

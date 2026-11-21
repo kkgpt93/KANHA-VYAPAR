@@ -7,10 +7,15 @@ import {
   Lock,
   Palette,
   Check,
+  Cloud,
+  LogOut,
+  RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useAuth } from '../context/AuthContext';
 import { ActiveTab } from '../types';
 import { COLOR_THEMES } from '../utils/themes';
+import { SupabaseAuthModal } from './SupabaseAuthModal';
 
 interface TopNavProps {
   onOpenNotifications: () => void;
@@ -31,22 +36,31 @@ export const TopNav: React.FC<TopNavProps> = ({
     isOffline,
     notifications,
     activeUser,
+    cloudSyncing,
+    syncNowToCloud,
   } = useApp();
+  const { authUser, authBusy, signOutUser } = useAuth();
 
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (themeMenuRef.current && !themeMenuRef.current.contains(e.target as Node)) {
         setIsThemeMenuOpen(false);
       }
+      if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
+        setIsAccountMenuOpen(false);
+      }
     };
-    if (isThemeMenuOpen) {
+    if (isThemeMenuOpen || isAccountMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isThemeMenuOpen]);
+  }, [isThemeMenuOpen, isAccountMenuOpen]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
@@ -63,6 +77,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   ];
 
   return (
+    <>
     <header className="sticky top-0 z-40 flex items-center justify-between gap-4 px-4 lg:px-6 py-3 brand-command-surface text-white border-b shadow-xs select-none no-print">
       {/* Zone 1: Single text element wordmark */}
       <div className="flex items-center gap-3 shrink-0">
@@ -207,6 +222,75 @@ export const TopNav: React.FC<TopNavProps> = ({
           {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4" />}
         </button>
 
+        {/* Supabase Cloud Account Sync Button */}
+        {!authUser ? (
+          <button
+            type="button"
+            disabled={authBusy}
+            onClick={() => setIsAuthModalOpen(true)}
+            title="Sign in with Supabase for Multi-Device Cloud Sync"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-white bg-white/12 hover:bg-white/22 border border-white/20 rounded-lg transition-colors whitespace-nowrap cursor-pointer disabled:opacity-60"
+          >
+            <Cloud className="w-3.5 h-3.5 brand-gold-text" />
+            <span className="hidden sm:inline">Supabase Sync</span>
+          </button>
+        ) : (
+          <div className="relative" ref={accountMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsAccountMenuOpen(prev => !prev)}
+              title={authUser.email || 'Supabase Account'}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-white bg-white/12 hover:bg-white/22 border border-white/20 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 font-bold text-[11px] flex items-center justify-center shrink-0">
+                {(authUser.displayName || authUser.email || 'U').charAt(0).toUpperCase()}
+              </span>
+              <span className="hidden lg:inline truncate max-w-[90px]">
+                {(authUser.displayName || 'Account').split(' ')[0]}
+              </span>
+              {cloudSyncing && <RefreshCw className="w-3 h-3 animate-spin brand-gold-text" />}
+            </button>
+
+            {isAccountMenuOpen && (
+              <div className="absolute right-0 mt-2 w-64 p-3 rounded-xl bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 border border-neutral-200 dark:border-neutral-800 shadow-xl z-50 space-y-2.5">
+                <div className="pb-2 border-b border-neutral-100 dark:border-neutral-800">
+                  <div className="text-xs font-bold truncate">
+                    {authUser.displayName || 'Store Account'}
+                  </div>
+                  <div className="text-[11px] text-neutral-500 truncate">
+                    {authUser.email}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={cloudSyncing}
+                  onClick={() => {
+                    void syncNowToCloud();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${cloudSyncing ? 'animate-spin' : ''}`} />
+                  <span>{cloudSyncing ? 'Syncing...' : 'Sync Store Data Now'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => {
+                    setIsAccountMenuOpen(false);
+                    void signOutUser();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Active Operator & Terminal Lock Button */}
         <button
           type="button"
@@ -221,5 +305,11 @@ export const TopNav: React.FC<TopNavProps> = ({
         </button>
       </div>
     </header>
+
+    <SupabaseAuthModal
+      isOpen={isAuthModalOpen}
+      onClose={() => setIsAuthModalOpen(false)}
+    />
+    </>
   );
 };
